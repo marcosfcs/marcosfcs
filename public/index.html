@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Stream Inspector — HLS / DASH</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="wrap">
+      <h1>📡 Stream Inspector</h1>
+      <p class="subtitle">Inspeção completa de transmissões HLS (<code>.m3u8</code>) e MPEG-DASH (<code>.mpd</code>) —
+        metadados, vídeo, áudio, legendas, DRM, telemetria em tempo real e curvas de cor para análise SDR/HDR.</p>
+
+      <form id="form" class="url-form" autocomplete="off">
+        <input id="url" type="url" required
+               placeholder="Cole a URL do manifest (.m3u8 ou .mpd)…"
+               spellcheck="false" />
+        <button id="btn-run" type="submit">Inspecionar</button>
+      </form>
+
+      <div class="examples">
+        <span class="examples-label">Exemplos:</span>
+        <button type="button" data-example="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8">HLS VOD (mux)</button>
+        <button type="button" data-example="https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8">HLS c/ legendas</button>
+        <button type="button" data-example="https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd">DASH VOD (Akamai)</button>
+        <button type="button" data-example="/samples/master.m3u8">Amostra local HLS</button>
+        <button type="button" data-example="/samples/manifest.mpd">Amostra local DASH</button>
+      </div>
+
+      <div id="status" class="status" hidden></div>
+    </div>
+  </header>
+
+  <main class="wrap" id="results" hidden>
+
+    <section>
+      <h2>Visão geral <span id="badges" class="badges"></span></h2>
+      <div id="overview"></div>
+      <details class="raw-details">
+        <summary>Manifest bruto</summary>
+        <pre id="raw-manifest"></pre>
+      </details>
+    </section>
+
+    <section>
+      <h2>Vídeo — variantes / representações</h2>
+      <div id="video-table"></div>
+    </section>
+
+    <section>
+      <h2>Áudio</h2>
+      <div id="audio-table"></div>
+    </section>
+
+    <section>
+      <h2>Legendas e closed captions</h2>
+      <div id="subs-table"></div>
+    </section>
+
+    <section>
+      <h2>DRM e criptografia</h2>
+      <div id="drm-table"></div>
+    </section>
+
+    <section id="sec-segments">
+      <h2>Segmentação</h2>
+      <div class="two-col">
+        <div id="seg-overview"></div>
+        <div>
+          <h3>Duração dos segmentos ao longo da linha do tempo</h3>
+          <div id="seg-chart"></div>
+        </div>
+      </div>
+      <h3>Segmentos</h3>
+      <div id="seg-table"></div>
+      <p id="seg-table-note" class="empty-note"></p>
+    </section>
+
+    <section>
+      <h2>Player e telemetria em tempo real</h2>
+      <div class="player-grid">
+        <div class="player-box">
+          <video id="video" controls muted playsinline></video>
+          <div class="tiles">
+            <div class="tile"><span class="tile-label">Estado</span><span class="tile-value" id="tile-state">—</span></div>
+            <div class="tile"><span class="tile-label">Tempo</span><span class="tile-value" id="tile-time">—</span></div>
+            <div class="tile"><span class="tile-label">Resolução ativa</span><span class="tile-value" id="tile-res">—</span></div>
+            <div class="tile"><span class="tile-label">Bitrate do nível</span><span class="tile-value" id="tile-bitrate">—</span></div>
+            <div class="tile"><span class="tile-label">Banda estimada</span><span class="tile-value" id="tile-bw">—</span></div>
+            <div class="tile"><span class="tile-label">Frames perdidos / total</span><span class="tile-value" id="tile-dropped">—</span></div>
+            <div class="tile" id="tile-latency-box" hidden><span class="tile-label">Latência (live)</span><span class="tile-value" id="tile-latency">—</span></div>
+            <div class="tile"><span class="tile-label">Luminância média</span><span class="tile-value" id="tile-apl">—</span></div>
+          </div>
+        </div>
+        <div class="charts-col">
+          <h3>Buffer de reprodução</h3>
+          <div id="chart-buffer"></div>
+          <h3>Bitrate e banda</h3>
+          <div id="chart-bitrate"></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Análise de cor — SDR / HDR</h2>
+      <div id="hdr-overview"></div>
+      <p id="color-note-hdr" class="note"></p>
+      <p id="color-note-runtime" class="note warn"></p>
+      <div class="two-col">
+        <div>
+          <h3>Curvas de cor por canal (histograma RGB do frame)</h3>
+          <div id="chart-rgb"></div>
+        </div>
+        <div>
+          <h3>Distribuição de luminância (Rec.709)</h3>
+          <div id="chart-luma"></div>
+        </div>
+      </div>
+      <h3>Evolução temporal — luminância média e clipping</h3>
+      <div id="chart-luma-t"></div>
+    </section>
+
+    <section>
+      <h2>Eventos</h2>
+      <ul id="event-log" class="event-log"></ul>
+    </section>
+
+  </main>
+
+  <footer class="wrap app-footer">
+    <p>Stream Inspector · playback via <a href="https://github.com/video-dev/hls.js" rel="noopener">hls.js</a> e
+      <a href="https://github.com/Dash-Industry-Forum/dash.js" rel="noopener">dash.js</a> ·
+      manifests de origens sem CORS passam pelo proxy local <code>/p/</code> do <code>server.js</code>.</p>
+  </footer>
+
+  <script src="vendor/hls.min.js"></script>
+  <script src="vendor/dash.all.min.js"></script>
+  <script src="js/parsers.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/analyzer.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

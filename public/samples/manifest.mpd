@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     xmlns:cenc="urn:mpeg:cenc:2013"
+     type="static"
+     mediaPresentationDuration="PT1M13.2S"
+     minBufferTime="PT4S"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011"
+     publishTime="2026-07-10T12:00:00Z">
+  <Period id="p0" duration="PT1M13.2S">
+
+    <AdaptationSet contentType="video" mimeType="video/mp4" segmentAlignment="true" startWithSAP="1" scanType="progressive">
+      <ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc" cenc:default_KID="9eb4050d-e44b-4802-932e-27d75083e266"/>
+      <ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"/>
+      <ContentProtection schemeIdUri="urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"/>
+      <SegmentTemplate timescale="90000" initialization="video/$RepresentationID$/init.mp4" media="video/$RepresentationID$/seg-$Number$.m4s" startNumber="1">
+        <SegmentTimeline>
+          <S t="0" d="360360" r="16"/>
+          <S d="180180"/>
+        </SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="v-360p" bandwidth="750000" width="640" height="360" frameRate="30000/1001" codecs="avc1.4d401e"/>
+      <Representation id="v-720p" bandwidth="2000000" width="1280" height="720" frameRate="30000/1001" codecs="avc1.4d401f"/>
+      <Representation id="v-1080p" bandwidth="4800000" width="1920" height="1080" frameRate="30000/1001" codecs="avc1.640028"/>
+      <Representation id="v-2160p-hdr" bandwidth="14000000" width="3840" height="2160" frameRate="60000/1001" codecs="hvc1.2.4.L153.B0">
+        <EssentialProperty schemeIdUri="urn:mpeg:mpegB:cicp:TransferCharacteristics" value="16"/>
+        <EssentialProperty schemeIdUri="urn:mpeg:mpegB:cicp:ColourPrimaries" value="9"/>
+      </Representation>
+    </AdaptationSet>
+
+    <AdaptationSet contentType="audio" mimeType="audio/mp4" lang="pt" segmentAlignment="true">
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="main"/>
+      <SegmentTemplate timescale="48000" initialization="audio/$RepresentationID$/init.mp4" media="audio/$RepresentationID$/seg-$Number$.m4s" duration="192512" startNumber="1"/>
+      <Representation id="a-pt-aac" bandwidth="128000" audioSamplingRate="48000" codecs="mp4a.40.2">
+        <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+      </Representation>
+    </AdaptationSet>
+
+    <AdaptationSet contentType="audio" mimeType="audio/mp4" lang="en" segmentAlignment="true">
+      <SegmentTemplate timescale="48000" initialization="audio/$RepresentationID$/init.mp4" media="audio/$RepresentationID$/seg-$Number$.m4s" duration="192512" startNumber="1"/>
+      <Representation id="a-en-eac3" bandwidth="256000" audioSamplingRate="48000" codecs="ec-3">
+        <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="6"/>
+      </Representation>
+    </AdaptationSet>
+
+    <AdaptationSet contentType="text" mimeType="application/mp4" lang="pt">
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="subtitle"/>
+      <Representation id="t-pt" bandwidth="2000" codecs="stpp"/>
+    </AdaptationSet>
+
+    <AdaptationSet contentType="text" mimeType="text/vtt" lang="en">
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="caption"/>
+      <Representation id="t-en" bandwidth="1500"/>
+    </AdaptationSet>
+
+  </Period>
+</MPD>
