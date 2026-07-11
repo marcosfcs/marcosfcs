@@ -16,14 +16,18 @@ const C = window.StreamContainer;
 
 const state = {
   charts: {},
-  player: null,        // instância Hls ou dashjs MediaPlayer
-  playerKind: null,    // 'hls' | 'dash'
+  player: null,        // instância Hls, dashjs MediaPlayer ou shaka.Player
+  playerKind: null,    // 'hls' | 'dash' | 'shaka'
+  engine: 'hlsjs',     // 'hlsjs' (hls.js + dash.js) | 'shaka' (Shaka Player p/ ambos)
   timer: null,
   analyzer: null,
   t0: 0,
   lastDropped: 0,
   drmBlocked: false,
+  lastPlay: null,      // { type, url, model, isLive } — p/ trocar de motor sem re-inspecionar
 };
+
+if (window.shaka && shaka.polyfill && shaka.polyfill.installAll) shaka.polyfill.installAll();
 
 /* ================================================================ *
  * Utilidades de rede
@@ -417,6 +421,7 @@ function stopPlayback() {
   if (state.player) {
     try {
       if (state.playerKind === 'hls') state.player.destroy();
+      else if (state.playerKind === 'shaka') { const p = state.player.destroy(); if (p && p.catch) p.catch(() => {}); }
       else state.player.reset();
     } catch { /* já destruído */ }
     state.player = null;
@@ -524,6 +529,14 @@ function startTelemetry(model, isLive) {
         if (tp) bw = tp / 1000;
         if (isLive) latency = state.player.getCurrentLiveLatency();
       } catch { /* player ainda inicializando */ }
+    } else if (state.playerKind === 'shaka' && state.player) {
+      try {
+        const stats = state.player.getStats();
+        const active = state.player.getVariantTracks().find((tr) => tr.active);
+        if (active && active.bandwidth) level = active.bandwidth / 1e6;
+        if (stats && stats.estimatedBandwidth) bw = stats.estimatedBandwidth / 1e6;
+        if (isLive) { const range = state.player.seekRange(); latency = range.end - video.currentTime; }
+      } catch { /* player ainda inicializando */ }
     }
     state.charts.bitrate && state.charts.bitrate.push(t, { level, bw });
     if (level != null) $('#tile-bitrate').textContent = level.toFixed(2).replace('.', ',') + ' Mbps';
@@ -557,6 +570,12 @@ function startPlayback(type, url, model, isLive) {
   const video = $('#video');
   state.drmBlocked = false;
   $('#color-note-runtime').textContent = '';
+  state.lastPlay = { type, url, model, isLive };
+
+  if (state.engine === 'shaka') {
+    startShakaPlayback(video, url, model, isLive);
+    return;
+  }
 
   if (type === 'hls') {
     if (!window.Hls || !Hls.isSupported()) {
@@ -604,6 +623,44 @@ function startPlayback(type, url, model, isLive) {
   video.muted = true;
   video.play().catch(() => logEvent('Autoplay bloqueado — clique no player para iniciar.'));
   video.addEventListener('waiting', () => logEvent('Rebuffering (waiting)…'), { once: false });
+
+  startTelemetry(model, isLive);
+}
+
+async function startShakaPlayback(video, url, model, isLive) {
+  if (!window.shaka || !shaka.Player.isBrowserSupported()) {
+    logEvent('Shaka Player não suportado neste navegador.');
+    return;
+  }
+  const player = new shaka.Player();
+  state.player = player;
+  state.playerKind = 'shaka';
+  try {
+    await player.attach(video);
+  } catch (e) {
+    logEvent('Erro ao anexar o Shaka Player ao vídeo: ' + e.message);
+    return;
+  }
+
+  player.addEventListener('error', (e) => {
+    const detail = e.detail || {};
+    logEvent(`Erro Shaka [código ${detail.code}]${detail.severity >= 2 ? ' (FATAL)' : ''}`);
+  });
+  player.addEventListener('adaptation', () => {
+    const active = player.getVariantTracks().find((t) => t.active);
+    if (active && active.width) logEvent(`Troca de nível → ${active.width}×${active.height} @ ${P.fmtBits(active.bandwidth)}`);
+  });
+  player.addEventListener('buffering', (e) => { if (e.buffering) logEvent('Rebuffering (buffering)…'); });
+
+  try {
+    await player.load(url);
+  } catch (e) {
+    logEvent(`Erro ao carregar no Shaka Player [${e.code || '—'}]: ${e.message || e}`);
+    return;
+  }
+
+  video.muted = true;
+  video.play().catch(() => logEvent('Autoplay bloqueado — clique no player para iniciar.'));
 
   startTelemetry(model, isLive);
 }
@@ -659,6 +716,7 @@ async function inspect(url) {
   setStatus('Baixando manifest…', 'busy');
   $('#event-log').innerHTML = '';
   stopPlayback();
+  state.lastPlay = null;
   for (const k of Object.keys(state.charts)) destroyChart(k);
 
   try {
@@ -760,6 +818,18 @@ document.addEventListener('DOMContentLoaded', () => {
     b.addEventListener('click', () => {
       $('#url').value = b.dataset.example;
       inspect(b.dataset.example);
+    });
+  }
+
+  for (const r of document.querySelectorAll('input[name="engine"]')) {
+    r.addEventListener('change', (e) => {
+      state.engine = e.target.value;
+      logEvent(`Motor de reprodução alterado para ${state.engine === 'shaka' ? 'Shaka Player' : 'HLS.js'}.`);
+      if (state.lastPlay) {
+        stopPlayback();
+        const { type, url, model, isLive } = state.lastPlay;
+        startPlayback(type, url, model, isLive);
+      }
     });
   }
 });

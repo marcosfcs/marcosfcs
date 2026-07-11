@@ -190,6 +190,14 @@ h3 { margin: 18px 0 8px; font-size: 14px; color: var(--text-secondary); font-wei
   background: #000; border-radius: 8px;
 }
 
+.engine-picker {
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 8px; font-size: 13px; color: var(--text-secondary);
+}
+.engine-picker-label { color: var(--text-muted); }
+.engine-picker label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.engine-picker input { accent-color: var(--accent); cursor: pointer; }
+
 /* ---------- stat tiles ---------- */
 
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin-top: 12px; }
