@@ -209,6 +209,28 @@ function parseMaster(lines, baseUrl) {
     }
   }
 
+  // Sem EXT-X-MEDIA de áudio: comum em simulcast de canais lineares, onde o
+  // áudio vem muxado no próprio stream de vídeo (mesmo .ts), sem faixa
+  // selecionável à parte. Sintetiza uma linha informativa em vez de deixar
+  // a tabela de Áudio vazia (o que sugeriria ausência de áudio).
+  if (model.audio.length === 0) {
+    const muxed = new Map();
+    for (const v of model.video) {
+      const ac = v.codecs.filter(isAudioCodec);
+      if (!ac.length) continue;
+      const key = ac.join(',');
+      if (!muxed.has(key)) muxed.set(key, new Set());
+      muxed.get(key).add(v.resolution);
+    }
+    for (const [codecs, resolutions] of muxed) {
+      model.audio.push({
+        name: 'Áudio embutido no vídeo (muxado)', lang: '—', groupId: '—',
+        channels: null, codecs, default: true, autoselect: true, muxed: true,
+        resolutions: [...resolutions].join(', '),
+      });
+    }
+  }
+
   model.overview = {
     'Protocolo': 'HLS (HTTP Live Streaming)',
     'Tipo de manifest': 'Master playlist (multi-variante)',

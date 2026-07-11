@@ -184,7 +184,7 @@ const AUDIO_COLUMNS = [
   { label: 'Amostragem', get: (a) => (a.samplingRate ? a.samplingRate + ' Hz' : '—'), num: true },
   { label: 'Bitrate', get: (a) => P.fmtBits(a.bandwidth), num: true },
   { label: 'Padrão', get: (a) => (a.default ? 'Sim' : 'Não') },
-  { label: 'Papéis', get: (a) => a.roles || (a.autoselect ? 'autoselect' : '—') },
+  { label: 'Papéis', get: (a) => (a.muxed ? `muxado (variantes: ${a.resolutions})` : a.roles || (a.autoselect ? 'autoselect' : '—')) },
 ];
 
 const SUB_COLUMNS = [
