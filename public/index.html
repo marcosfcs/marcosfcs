@@ -79,6 +79,17 @@
       <p id="seg-table-note" class="empty-note"></p>
     </section>
 
+    <section id="sec-container" hidden>
+      <h2>Container real <span class="badge badge-info">inspeção binária</span></h2>
+      <p class="note">Lido diretamente dos bytes de um segmento de amostra (não do manifest) — revela o que
+        realmente está no arquivo, incluindo casos em que o manifest não declara tudo (áudio muxado,
+        criptografia via <code>pssh</code>/<code>tenc</code> sem <code>ContentProtection</code>, etc.).</p>
+      <div id="container-overview"></div>
+      <h3>Streams / tracks encontrados</h3>
+      <div id="container-table"></div>
+      <p id="container-note" class="note"></p>
+    </section>
+
     <section>
       <h2>Player e telemetria em tempo real</h2>
       <div class="player-grid">
@@ -139,6 +150,7 @@
   <script src="vendor/hls.min.js"></script>
   <script src="vendor/dash.all.min.js"></script>
   <script src="js/parsers.js"></script>
+  <script src="js/container.js"></script>
   <script src="js/charts.js"></script>
   <script src="js/analyzer.js"></script>
   <script src="js/app.js"></script>

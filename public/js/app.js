@@ -12,6 +12,7 @@
 
 const $ = (sel) => document.querySelector(sel);
 const P = window.StreamParsers;
+const C = window.StreamContainer;
 
 const state = {
   charts: {},
@@ -58,6 +59,46 @@ async function fetchManifest(url) {
     );
   }
   return { text: await r.text(), effectiveUrl: new URL(p, location.href).href, proxied: true };
+}
+
+/**
+ * Baixa até maxBytes de uma URL (Range quando o servidor suporta; corta o
+ * stream cedo quando não suporta) — usado para sondar o container de um
+ * segmento sem precisar baixá-lo inteiro. Mesmo fallback de proxy do
+ * fetchManifest.
+ */
+async function fetchBytes(url, maxBytes) {
+  const attempt = async (target) => {
+    const r = await fetch(target, maxBytes ? { headers: { Range: `bytes=0-${maxBytes - 1}` } } : {});
+    if (!r.ok && r.status !== 206) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+    if (!maxBytes || !r.body) return await r.arrayBuffer();
+    const reader = r.body.getReader();
+    const chunks = [];
+    let received = 0;
+    while (received < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+    }
+    reader.cancel().catch(() => {});
+    const out = new Uint8Array(Math.min(received, maxBytes));
+    let pos = 0;
+    for (const c of chunks) {
+      const take = Math.min(c.length, out.length - pos);
+      out.set(c.subarray(0, take), pos);
+      pos += take;
+      if (pos >= out.length) break;
+    }
+    return out.buffer;
+  };
+  try {
+    return { buf: await attempt(url), proxied: false };
+  } catch (e) {
+    const p = proxify(url);
+    if (p === url) throw e;
+    return { buf: await attempt(p), proxied: true };
+  }
 }
 
 function detectType(url, text) {
@@ -257,6 +298,110 @@ function renderSegments(seg, sourceNote) {
   renderTable($('#seg-table'), SEG_COLUMNS, seg.list.slice(0, 60), '');
   $('#seg-table-note').textContent =
     seg.list.length > 60 ? `Exibindo os primeiros 60 de ${seg.list.length} segmentos.` : '';
+}
+
+/* ================================================================ *
+ * Container real — inspeção binária de um segmento de amostra
+ * ================================================================ */
+
+const TS_COLUMNS = [
+  { label: 'PID', get: (s) => '0x' + s.pid.toString(16), mono: true },
+  { label: 'Tipo', get: (s) => s.streamTypeName },
+  { label: 'Idioma', get: (s) => s.language || '—' },
+  { label: 'Formato (descritor)', get: (s) => s.formatHint || '—' },
+  { label: 'Acesso condicional', get: (s) => (s.conditionalAccess ? 'SIM (CA)' : '—') },
+  { label: 'Descritores', get: (s) => s.descriptorTags.join(', ') || '—' },
+];
+
+const FMP4_COLUMNS = [
+  { label: 'Track', get: (t) => t.trackId ?? '—', num: true },
+  { label: 'Tipo', get: (t) => t.handlerName },
+  { label: 'Codec (sample entry)', get: (t) => t.codec || '—', mono: true },
+  { label: 'Codec efetivo', get: (t) => P.codecName(t.effectiveCodec || t.codec || '') },
+  { label: 'Idioma', get: (t) => t.language },
+  { label: 'Resolução', get: (t) => (t.width ? `${t.width}x${t.height}` : '—') },
+  { label: 'Áudio', get: (t) => (t.channels ? `${t.channels} ch · ${t.sampleRate} Hz` : '—') },
+  { label: 'Proteção', get: (t) => fmp4Protection(t) },
+];
+
+function fmp4Protection(t) {
+  if (!t.protection) return '—';
+  const scheme = t.protection.schemeType ? t.protection.schemeType.toUpperCase() : 'protegido';
+  return t.protection.defaultKid ? `${scheme} · KID ${t.protection.defaultKid}` : scheme;
+}
+
+/** Decide de onde tirar a amostra (segmento .ts ou init .mp4/.m4s) e sonda o container. */
+async function probeContainer(protocol, hlsMediaModel, dashModel) {
+  const section = $('#sec-container');
+  section.hidden = false;
+  renderKV($('#container-overview'), { 'Status': 'Buscando amostra de segmento…' });
+  $('#container-table').innerHTML = '';
+  $('#container-note').textContent = '';
+
+  let sampleUrl = null, kindHint = null;
+  if (protocol === 'HLS' && hlsMediaModel) {
+    if (hlsMediaModel.maps && hlsMediaModel.maps.length) { sampleUrl = hlsMediaModel.maps[0]; kindHint = 'fmp4'; }
+    else if (hlsMediaModel.segments && hlsMediaModel.segments.length) { sampleUrl = hlsMediaModel.segments[0].uri; kindHint = 'ts'; }
+  } else if (protocol === 'DASH' && dashModel) {
+    const v0 = (dashModel.video || [])[0];
+    if (v0 && v0.initUrl && typeof v0.initUrl === 'string') { sampleUrl = v0.initUrl; kindHint = 'fmp4'; }
+  }
+
+  if (!sampleUrl) {
+    renderKV($('#container-overview'), { 'Status': 'Não foi possível localizar uma URL de segmento/inicialização para inspecionar.' });
+    return;
+  }
+
+  try {
+    const maxBytes = kindHint === 'ts' ? 256 * 1024 : 2 * 1024 * 1024;
+    const { buf, proxied } = await fetchBytes(sampleUrl, maxBytes);
+    const detected = C.sniffContainer(buf);
+
+    if (detected === 'ts') {
+      const info = C.parseTsContainer(buf);
+      renderKV($('#container-overview'), {
+        'Amostra': sampleUrl.split('/').pop(),
+        'Obtido via': proxied ? 'proxy local (/p/)' : 'fetch direto',
+        'Bytes lidos': (buf.byteLength).toLocaleString('pt-BR'),
+        'Container detectado': `MPEG-TS (pacotes de ${info.packetSize} bytes)`,
+        'PAT/PMT decodificados': info.pmtFound ? 'Sim' : 'Não (seção não encontrada nos bytes lidos)',
+        'Pacotes com scrambling': info.scrambledPackets > 0 ? `${info.scrambledPackets} de ${info.totalPacketsRead}` : 'Nenhum',
+      });
+      renderTable($('#container-table'), TS_COLUMNS, info.streams, 'PMT não encontrada — não foi possível listar os streams elementares.');
+      $('#container-note').textContent =
+        'Streams elementares lidos diretamente do PAT/PMT do segmento (não do manifest). ' +
+        (info.scrambledPackets > 0 ? 'Atenção: pacotes com scrambling detectado no cabeçalho do TS (payload cifrado).' :
+          'Estrutura totalmente legível — payload não está cifrado no nível do TS (uma eventual criptografia AES-128 de segmento inteiro tornaria a estrutura ilegível, o que não é o caso aqui).');
+    } else if (detected === 'fmp4') {
+      const info = C.parseFmp4Container(buf);
+      renderKV($('#container-overview'), {
+        'Amostra': sampleUrl.split('/').pop(),
+        'Obtido via': proxied ? 'proxy local (/p/)' : 'fetch direto',
+        'Bytes lidos': (buf.byteLength).toLocaleString('pt-BR'),
+        'Container detectado': `fMP4/ISOBMFF${info.brand ? ' (brand: ' + info.brand + ')' : ''}`,
+        'moov encontrada': info.hasMoov ? 'Sim' : 'Não',
+        'DRM (pssh no init)': info.pssh.length ? [...new Set(info.pssh.map((p) => p.system))].join(', ') : 'Nenhum pssh encontrado',
+      });
+      renderTable($('#container-table'), FMP4_COLUMNS, info.tracks, info.note || 'Nenhuma track encontrada na moov.');
+      $('#container-note').textContent =
+        'Tracks e (quando presente) esquema de criptografia/KID lidos diretamente da caixa "moov" do segmento de ' +
+        'inicialização — a moov nunca é criptografada, então esses dados são fidedignos mesmo quando o manifest ' +
+        'não declara nada sobre codecs reais, idiomas ou DRM.';
+    } else {
+      renderKV($('#container-overview'), {
+        'Amostra': sampleUrl.split('/').pop(),
+        'Obtido via': proxied ? 'proxy local (/p/)' : 'fetch direto',
+        'Bytes lidos': (buf.byteLength).toLocaleString('pt-BR'),
+        'Container detectado': 'Não identificado',
+      });
+      $('#container-note').textContent =
+        'A estrutura não bate com MPEG-TS nem com um box ISOBMFF válido logo no início do arquivo. ' +
+        'Isso é esperado quando o segmento inteiro está cifrado (ex.: HLS AES-128 de segmento completo) — ' +
+        'nesse caso os bytes são puro ciphertext e não há estrutura de container para ler sem a chave.';
+    }
+  } catch (e) {
+    renderKV($('#container-overview'), { 'Status': 'Erro ao buscar/inspecionar a amostra: ' + e.message });
+  }
 }
 
 /* ================================================================ *
@@ -532,6 +677,7 @@ async function inspect(url) {
     renderHdrPanel(model);
 
     let isLive = /AO VIVO/.test(model.overview['Transmissão'] || '');
+    let resolvedMediaModel = null;
 
     // Segmentos
     if (model.protocol === 'HLS' && model.kind === 'master') {
@@ -542,6 +688,7 @@ async function inspect(url) {
         try {
           const mp = await fetchManifest(top.uri);
           const mediaModel = P.parseM3U8(mp.text, mp.effectiveUrl);
+          resolvedMediaModel = mediaModel;
           if (mediaModel.kind === 'media') {
             isLive = mediaModel.live;
             model.overview['Transmissão'] = mediaModel.live ? 'AO VIVO (sem EXT-X-ENDLIST)' : 'VOD (finalizada)';
@@ -571,9 +718,13 @@ async function inspect(url) {
         { ...model, count: model.segments.length, list: model.segments, targetDuration: model.targetDuration, totalDuration: model.totalDuration },
         'playlist de mídia (URL informada)'
       );
+      resolvedMediaModel = model;
     } else if (model.protocol === 'DASH') {
       renderSegments(model.segments, model.segments && model.segments.source);
     }
+
+    // Container real — não bloqueia o restante da UI
+    probeContainer(model.protocol, resolvedMediaModel, model.protocol === 'DASH' ? model : null);
 
     // Playback + telemetria
     setupTelemetryCharts(isLive);

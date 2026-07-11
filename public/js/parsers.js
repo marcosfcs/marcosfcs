@@ -462,6 +462,7 @@ function parseMPD(xmlText, baseUrl) {
             scanType: inheritedAttr(repEl, asEl, 'scanType'),
             sar: inheritedAttr(repEl, asEl, 'sar'),
             segInfo,
+            initUrl: resolveInitUrl(segInfo, id, bw, baseUrl),
           });
         } else if (contentType === 'audio' || codecs.some(isAudioCodec)) {
           const ch = repEl.querySelector('AudioChannelConfiguration') || asEl.querySelector('AudioChannelConfiguration');
@@ -542,11 +543,34 @@ function extractSegmentInfo(asEl) {
       duration: tpl.getAttribute('duration') ? Number(tpl.getAttribute('duration')) / timescale : null,
       startNumber: Number(tpl.getAttribute('startNumber') || 1),
       timeline: entries,
+      initTemplate: tpl.getAttribute('initialization') || null,
     };
   }
-  if (asEl.querySelector('SegmentList')) return { mode: 'SegmentList' };
-  if (asEl.querySelector('SegmentBase')) return { mode: 'SegmentBase (arquivo único indexado)' };
+  const segList = asEl.querySelector('SegmentList');
+  if (segList) {
+    const initEl = segList.querySelector('Initialization');
+    return { mode: 'SegmentList', initUrlList: initEl ? initEl.getAttribute('sourceURL') : null };
+  }
+  const segBase = asEl.querySelector('SegmentBase');
+  if (segBase) {
+    const initEl = segBase.querySelector('Initialization');
+    return { mode: 'SegmentBase (arquivo único indexado)', initRange: initEl ? initEl.getAttribute('range') : null };
+  }
   return { mode: '—' };
+}
+
+/** Substitui $RepresentationID$/$Bandwidth$ num template de SegmentTemplate e resolve contra baseUrl. */
+function resolveInitUrl(segInfo, repId, bandwidth, baseUrl) {
+  if (!segInfo) return null;
+  if (segInfo.initTemplate) {
+    const uri = segInfo.initTemplate
+      .replace(/\$RepresentationID\$/g, repId)
+      .replace(/\$Bandwidth\$/g, bandwidth != null ? String(bandwidth) : '');
+    return resolveUrl(uri, baseUrl);
+  }
+  if (segInfo.initUrlList) return resolveUrl(segInfo.initUrlList, baseUrl);
+  if (segInfo.initRange) return { sameFile: true, range: segInfo.initRange };
+  return null;
 }
 
 function segmentsFromDash(segInfo, mediaDuration, live) {
