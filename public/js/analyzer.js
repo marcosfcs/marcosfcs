@@ -49,6 +49,13 @@ class ColorAnalyzer {
     let sumY = 0, clipLow = 0, clipHigh = 0;
     const n = w * h;
 
+    // amostragem esparsa para o diagrama de cromaticidade (instantâneo,
+    // custo de conversão xy é maior que o do histograma)
+    const rgbToXy = window.StreamChromaticity && window.StreamChromaticity.rgb8ToXy;
+    const chromaPoints = [];
+    const chromaStride = Math.max(1, Math.floor(n / 400)); // ~400 pontos por amostragem
+    let pixelIndex = 0;
+
     for (let i = 0; i < n * 4; i += 4) {
       const r = img[i], g = img[i + 1], b = img[i + 2];
       histR[r]++; histG[g]++; histB[b]++;
@@ -57,6 +64,12 @@ class ColorAnalyzer {
       sumY += y;
       if (y <= 4) clipLow++;
       else if (y >= 251) clipHigh++;
+
+      if (rgbToXy && pixelIndex % chromaStride === 0) {
+        const xy = rgbToXy(r, g, b);
+        if (xy) chromaPoints.push({ x: xy.x, y: xy.y, r, g, b });
+      }
+      pixelIndex++;
     }
 
     return {
@@ -69,6 +82,7 @@ class ColorAnalyzer {
       avgLuma: (sumY / n / 255) * 100,          // % da faixa
       clipLowPct: (clipLow / n) * 100,
       clipHighPct: (clipHigh / n) * 100,
+      chromaPoints,
     };
   }
 }

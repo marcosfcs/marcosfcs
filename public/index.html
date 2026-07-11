@@ -132,6 +132,13 @@
       </div>
       <h3>Evolução temporal — luminância média e clipping</h3>
       <div id="chart-luma-t"></div>
+
+      <h3>Cromaticidade CIE 1931 xy — frame atual (instantâneo)</h3>
+      <p class="note">Cada ponto é um pixel amostrado do frame mais recente, na cor real dele, convertido para
+        coordenadas de cromaticidade — mostra se o conteúdo está de fato usando um gamut mais amplo que o
+        Rec.709/sRGB, ou se na prática fica todo contido nele. Não acumula histórico: a cada nova amostragem
+        os pontos são substituídos pelos do frame atual.</p>
+      <div id="chart-chroma"></div>
     </section>
 
     <section>
@@ -152,6 +159,7 @@
   <script src="js/parsers.js"></script>
   <script src="js/container.js"></script>
   <script src="js/charts.js"></script>
+  <script src="js/chromaticity.js"></script>
   <script src="js/analyzer.js"></script>
   <script src="js/app.js"></script>
 </body>

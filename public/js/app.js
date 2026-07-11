@@ -473,6 +473,8 @@ function setupTelemetryCharts(isLive) {
     xFormat: (v) => String(Math.round(v)),
     xMin: 0, xMax: 255, height: 220, yMin: 0,
   });
+  destroyChart('chroma');
+  state.charts.chroma = new StreamChromaticity.ChromaticityChart($('#chart-chroma'), { height: 340 });
   $('#tile-latency-box').hidden = !isLive;
 }
 
@@ -544,6 +546,7 @@ function startTelemetry(model, isLive) {
         state.charts.rgb.setSeriesData('b', toPoints(s.histB));
         state.charts.luma.setSeriesData('y', toPoints(s.histY));
         state.charts.lumaT.push(t, { apl: s.avgLuma, clipH: s.clipHighPct, clipL: s.clipLowPct });
+        state.charts.chroma.setPoints(s.chromaPoints);
         $('#tile-apl').textContent = s.avgLuma.toFixed(1).replace('.', ',') + '%';
       }
     }
