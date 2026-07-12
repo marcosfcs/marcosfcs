@@ -99,6 +99,20 @@
             <label><input type="radio" name="engine" value="hlsjs" checked /> HLS.js</label>
             <label><input type="radio" name="engine" value="shaka" /> Shaka Player</label>
           </div>
+          <div class="net-test" title="Limita a velocidade com que o proxy local entrega os segmentos — observe no gráfico de bitrate como o ABR troca de perfil/ladder.">
+            <span class="engine-picker-label">Teste de rede:</span>
+            <select id="throttle">
+              <option value="0" selected>Sem limite</option>
+              <option value="20000">20 Mbps</option>
+              <option value="10000">10 Mbps</option>
+              <option value="5000">5 Mbps</option>
+              <option value="3000">3 Mbps</option>
+              <option value="2000">2 Mbps</option>
+              <option value="1000">1 Mbps</option>
+              <option value="500">0,5 Mbps</option>
+            </select>
+            <label><input type="checkbox" id="force-proxy" /> Reproduzir via proxy</label>
+          </div>
           <video id="video" controls muted playsinline></video>
           <div class="tiles">
             <div class="tile"><span class="tile-label">Estado</span><span class="tile-value" id="tile-state">—</span></div>
@@ -107,7 +121,10 @@
             <div class="tile"><span class="tile-label">Bitrate do nível</span><span class="tile-value" id="tile-bitrate">—</span></div>
             <div class="tile"><span class="tile-label">Banda estimada</span><span class="tile-value" id="tile-bw">—</span></div>
             <div class="tile"><span class="tile-label">Frames perdidos / total</span><span class="tile-value" id="tile-dropped">—</span></div>
-            <div class="tile" id="tile-latency-box" hidden><span class="tile-label">Latência (live)</span><span class="tile-value" id="tile-latency">—</span></div>
+            <div class="tile" id="tile-latency-box" hidden><span class="tile-label">Latência (edge)</span><span class="tile-value" id="tile-latency">—</span></div>
+            <div class="tile" id="tile-e2e-box" hidden><span class="tile-label">Latência E2E (PDT)</span><span class="tile-value" id="tile-e2e">—</span></div>
+            <div class="tile"><span class="tile-label">FPS real / nominal</span><span class="tile-value" id="tile-fps">—</span></div>
+            <div class="tile"><span class="tile-label">Último segmento</span><span class="tile-value" id="tile-lastseg">—</span></div>
             <div class="tile"><span class="tile-label">Luminância média</span><span class="tile-value" id="tile-apl">—</span></div>
           </div>
         </div>
@@ -117,6 +134,72 @@
           <h3>Bitrate e banda</h3>
           <div id="chart-bitrate"></div>
         </div>
+      </div>
+      <div class="two-col">
+        <div>
+          <h3>TTFB por segmento <span class="hint">(hls.js e dash.js; o Shaka não expõe TTFB)</span></h3>
+          <div id="chart-ttfb"></div>
+        </div>
+        <div>
+          <h3>Throughput por segmento</h3>
+          <div id="chart-throughput"></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Áudio em tempo real</h2>
+      <p id="audio-note" class="note warn"></p>
+      <div class="vu-wrap">
+        <div class="vu-row" id="vu-l">
+          <span class="vu-ch">L</span>
+          <div class="vu-track"><div class="vu-cover"></div><div class="vu-peak"></div></div>
+          <span class="vu-db">—</span>
+        </div>
+        <div class="vu-row" id="vu-r">
+          <span class="vu-ch">R</span>
+          <div class="vu-track"><div class="vu-cover"></div><div class="vu-peak"></div></div>
+          <span class="vu-db">—</span>
+        </div>
+      </div>
+      <div class="two-col">
+        <div>
+          <h3>Nível RMS por canal <span class="hint">(aproximação "momentary"; não é LUFS)</span></h3>
+          <div id="chart-audio-level"></div>
+        </div>
+        <div>
+          <h3>Espectro de frequências</h3>
+          <div id="chart-spectrum"></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Alertas de monitoração</h2>
+      <div class="threshold-row">
+        <label>Silêncio abaixo de <input type="number" id="th-silence" value="-50" step="1" max="0" min="-60" /> dBFS</label>
+        <label>Congelamento após <input type="number" id="th-freeze" value="5" step="1" min="2" max="60" /> s</label>
+        <label>Buffer baixo &lt; <input type="number" id="th-buffer" value="2" step="0.5" min="0.5" max="30" /> s</label>
+      </div>
+      <div id="alert-list"></div>
+    </section>
+
+    <section>
+      <h2>Relatório da sessão (QoE)
+        <span class="export-btns">
+          <button type="button" id="btn-export-json" class="btn-secondary">Exportar JSON</button>
+          <button type="button" id="btn-export-csv" class="btn-secondary">Exportar CSV</button>
+        </span>
+      </h2>
+      <div class="tiles">
+        <div class="tile"><span class="tile-label">Startup (1º frame)</span><span class="tile-value" id="qoe-startup">—</span></div>
+        <div class="tile"><span class="tile-label">Tempo assistido</span><span class="tile-value" id="qoe-watch">—</span></div>
+        <div class="tile"><span class="tile-label">Rebuffers (n / total)</span><span class="tile-value" id="qoe-rebuffers">—</span></div>
+        <div class="tile"><span class="tile-label">Ratio de rebuffering</span><span class="tile-value" id="qoe-ratio">—</span></div>
+        <div class="tile"><span class="tile-label">Trocas ABR</span><span class="tile-value" id="qoe-switches">—</span></div>
+        <div class="tile"><span class="tile-label">Bitrate médio (ponderado)</span><span class="tile-value" id="qoe-avgbitrate">—</span></div>
+        <div class="tile"><span class="tile-label">FPS real / nominal</span><span class="tile-value" id="qoe-fps">—</span></div>
+        <div class="tile"><span class="tile-label">Frames perdidos / total</span><span class="tile-value" id="qoe-dropped">—</span></div>
       </div>
     </section>
 
@@ -167,6 +250,10 @@
   <script src="js/charts.js"></script>
   <script src="js/chromaticity.js"></script>
   <script src="js/analyzer.js"></script>
+  <script src="js/audiometer.js"></script>
+  <script src="js/alerts.js"></script>
+  <script src="js/qoe.js"></script>
+  <script src="js/netmon.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

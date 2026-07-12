@@ -35,6 +35,11 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_REDIRECTS = 5;
 const MANIFEST_MAX_BYTES = 20 * 1024 * 1024; // manifests são pequenos; limite de segurança
 
+// Teste de rede: limite de banda aplicado aos SEGMENTOS servidos pelo proxy
+// (manifests ficam de fora para não gerar falso positivo de playlist
+// estagnada). 0 = sem limite. Controlado pela UI via GET /throttle?kbps=N.
+let throttleKbps = 0;
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -250,7 +255,8 @@ function handleProxy(req, res, urlPath, search) {
         if (upstream.headers[h]) passthrough[h] = upstream.headers[h];
       }
       res.writeHead(upstream.statusCode || 200, passthrough);
-      upstream.pipe(res);
+      if (throttleKbps > 0) throttledPipe(upstream, res, (throttleKbps * 1000) / 8);
+      else upstream.pipe(res);
       return;
     }
 
@@ -277,6 +283,32 @@ function handleProxy(req, res, urlPath, search) {
       res.end();
     });
   });
+}
+
+/** Repassa src→dst limitado a bytesPerSec (pausa a origem entre chunks). */
+function throttledPipe(src, dst, bytesPerSec) {
+  src.on('data', (chunk) => {
+    dst.write(chunk);
+    src.pause();
+    const delayMs = (chunk.length / bytesPerSec) * 1000;
+    setTimeout(() => { if (!src.destroyed) src.resume(); }, delayMs);
+  });
+  src.on('end', () => dst.end());
+  src.on('error', () => dst.destroy());
+  dst.on('close', () => src.destroy());
+}
+
+function handleThrottle(res, search) {
+  const m = (search || '').match(/[?&]kbps=(\d+)/);
+  const kbps = m ? Number(m[1]) : NaN;
+  if (isNaN(kbps) || kbps < 0 || kbps > 1000000) {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'kbps deve estar entre 0 (sem limite) e 1000000' }));
+  }
+  throttleKbps = kbps;
+  console.log(kbps > 0 ? `Throttle: ${kbps} kbps` : 'Throttle: desligado');
+  res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+  res.end(JSON.stringify({ throttleKbps }));
 }
 
 function handleStatic(req, res, urlPath) {
@@ -320,6 +352,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (urlPath.startsWith('/p/')) return handleProxy(req, res, urlPath, search);
+  if (urlPath === '/throttle') return handleThrottle(res, search);
   return handleStatic(req, res, urlPath);
 });
 

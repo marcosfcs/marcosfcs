@@ -25,6 +25,22 @@ const state = {
   lastDropped: 0,
   drmBlocked: false,
   lastPlay: null,      // { type, url, model, isLive } — p/ trocar de motor sem re-inspecionar
+
+  // telemetria avançada
+  audioMeter: null,
+  vuTimer: null,
+  qoe: null,
+  netmon: null,
+  alertEngine: null,
+  lastThumb: null,
+  lastFreezeDiff: null,
+  lastCurrentTime: 0,
+  timeAdvancing: false,
+  lastAudio: null,     // última leitura do AudioMeter
+  lastColor: null,     // última amostra do ColorAnalyzer
+  sessionUrl: null,
+  sessionOverview: null,
+  targetDuration: 6,   // p/ alerta de playlist estagnada
 };
 
 if (window.shaka && shaka.polyfill && shaka.polyfill.installAll) shaka.polyfill.installAll();
@@ -418,6 +434,14 @@ function destroyChart(key) {
 
 function stopPlayback() {
   if (state.timer) { clearInterval(state.timer); state.timer = null; }
+  if (state.vuTimer) { clearInterval(state.vuTimer); state.vuTimer = null; }
+  if (state.audioMeter) { state.audioMeter.destroy(); state.audioMeter = null; }
+  if (state.qoe) { state.qoe.destroy(); state.qoe = null; }
+  if (state.netmon) { state.netmon.destroy(); state.netmon = null; }
+  state.lastThumb = null;
+  state.lastFreezeDiff = null;
+  state.lastAudio = null;
+  state.lastColor = null;
   if (state.player) {
     try {
       if (state.playerKind === 'hls') state.player.destroy();
@@ -439,6 +463,8 @@ function fmtClock(sec) {
 function setupTelemetryCharts(isLive) {
   destroyChart('buffer'); destroyChart('bitrate'); destroyChart('lumaT');
   destroyChart('rgb'); destroyChart('luma');
+  destroyChart('audioLevel'); destroyChart('spectrum');
+  destroyChart('ttfb'); destroyChart('throughput');
 
   state.charts.buffer = new LineChart($('#chart-buffer'), {
     series: [{ key: 'buf', label: 'Buffer à frente', colorVar: '--series-1', fill: true }],
@@ -480,7 +506,37 @@ function setupTelemetryCharts(isLive) {
   });
   destroyChart('chroma');
   state.charts.chroma = new StreamChromaticity.ChromaticityChart($('#chart-chroma'), { height: 340 });
+
+  // áudio
+  state.charts.audioLevel = new LineChart($('#chart-audio-level'), {
+    series: [
+      { key: 'l', label: 'Canal esquerdo (RMS)', colorVar: '--series-1' },
+      { key: 'r', label: 'Canal direito (RMS)', colorVar: '--series-2' },
+    ],
+    yFormat: (v) => v.toFixed(0) + ' dBFS',
+    xFormat: fmtClock, windowSec: 120, height: 180, yMin: -60, yMax: 0,
+  });
+  state.charts.spectrum = new LineChart($('#chart-spectrum'), {
+    series: [{ key: 's', label: 'Espectro', colorVar: '--series-2', fill: true }],
+    yFormat: (v) => (v * 100).toFixed(0) + '%',
+    xFormat: (v) => (v * (state.audioBinHz || 250) / 1000).toFixed(1) + ' kHz',
+    xMin: 0, xMax: 95, height: 160, yMin: 0, yMax: 1,
+  });
+
+  // rede
+  state.charts.ttfb = new LineChart($('#chart-ttfb'), {
+    series: [{ key: 'ttfb', label: 'TTFB do segmento', colorVar: '--series-3' }],
+    yFormat: (v) => v.toFixed(0) + ' ms',
+    xFormat: fmtClock, windowSec: 120, height: 160, yMin: 0,
+  });
+  state.charts.throughput = new LineChart($('#chart-throughput'), {
+    series: [{ key: 'tp', label: 'Throughput do segmento', colorVar: '--series-2' }],
+    yFormat: (v) => v.toFixed(1).replace('.', ',') + ' Mbps',
+    xFormat: fmtClock, windowSec: 120, height: 160, yMin: 0,
+  });
+
   $('#tile-latency-box').hidden = !isLive;
+  $('#tile-e2e-box').hidden = true;
 }
 
 function updateTiles(t) {
@@ -493,12 +549,135 @@ function updateTiles(t) {
   $('#tile-state').textContent = states;
 }
 
+function readThresholds() {
+  return {
+    silenceDbfs: Number($('#th-silence').value) || -50,
+    freezeSec: Number($('#th-freeze').value) || 5,
+    bufferSec: Number($('#th-buffer').value) || 2,
+  };
+}
+
+function setupAlertEngine(model, isLive) {
+  const video = $('#video');
+  const engine = new AlertEngine({
+    listEl: $('#alert-list'),
+    onLog: logEvent,
+    thresholds: readThresholds(),
+  });
+  const th = () => engine.thresholds;
+  const playing = () => !video.paused && video.readyState >= 3 && !video.ended;
+
+  engine.register('freeze', {
+    label: 'Possível congelamento de vídeo (frame estático com tempo avançando)',
+    severity: 'critical',
+    get sustainSec() { return th().freezeSec; },
+    test: (c) => {
+      if (!playing() || !c.timeAdvancing || c.freezeDiff == null) return null;
+      return c.freezeDiff < 0.5;
+    },
+  });
+  engine.register('black', {
+    label: 'Tela preta',
+    severity: 'critical',
+    sustainSec: 5,
+    test: (c) => {
+      if (!playing() || c.avgLuma == null) return null;
+      return c.avgLuma < 2;
+    },
+  });
+  engine.register('silence', {
+    label: 'Silêncio de áudio prolongado',
+    severity: 'critical',
+    sustainSec: 5,
+    test: (c) => {
+      if (!playing() || c.dbfsMax == null || c.audioTainted) return null;
+      return c.dbfsMax < th().silenceDbfs;
+    },
+  });
+  engine.register('lowBuffer', {
+    label: 'Buffer de reprodução baixo',
+    severity: 'warning',
+    sustainSec: 3,
+    test: (c) => {
+      if (!playing() || c.buffer == null) return null;
+      return c.buffer < th().bufferSec;
+    },
+  });
+  engine.register('lowBandwidth', {
+    label: 'Banda estimada abaixo do bitrate do nível ativo',
+    severity: 'warning',
+    sustainSec: 10,
+    test: (c) => {
+      if (c.bwMbps == null || c.levelMbps == null) return null;
+      return c.bwMbps < c.levelMbps;
+    },
+  });
+  engine.register('lowFps', {
+    label: 'FPS de apresentação abaixo de 50% do nominal',
+    severity: 'warning',
+    sustainSec: 10,
+    test: (c) => {
+      if (!playing() || c.fps == null || !c.nominalFps) return null;
+      return c.fps < c.nominalFps * 0.5;
+    },
+  });
+  if (isLive) {
+    engine.register('stalePlaylist', {
+      label: 'Playlist/manifest live estagnado (sem atualização)',
+      severity: 'critical',
+      sustainSec: 0,
+      test: (c) => {
+        if (c.manifestAgeSec == null) return null;
+        return c.manifestAgeSec > 3 * (state.targetDuration || 6);
+      },
+    });
+  }
+  return engine;
+}
+
 function startTelemetry(model, isLive) {
   const video = $('#video');
   state.analyzer = new ColorAnalyzer(video);
   state.t0 = performance.now();
   state.lastDropped = 0;
+  state.lastCurrentTime = video.currentTime;
   let colorTick = 0;
+
+  // módulos de telemetria avançada
+  const nominalFps = (model.video || []).map((v) => v.frameRate).find((f) => f) || null;
+  state.qoe = new StreamQoe.QoeSession(video, { nominalFps });
+  state.audioMeter = new AudioMeter(video);
+  if (!state.audioMeter.ok) {
+    $('#audio-note').textContent = 'Medição de áudio indisponível: ' + (state.audioMeter.error || 'Web Audio não suportado');
+  } else {
+    $('#audio-note').textContent = '';
+  }
+  if (state.player && state.playerKind) {
+    state.netmon = new NetMonitor(state.player, state.playerKind, (s) => {
+      const t = (performance.now() - state.t0) / 1000;
+      if (s.ttfbMs != null) state.charts.ttfb && state.charts.ttfb.push(t, { ttfb: s.ttfbMs });
+      state.charts.throughput && state.charts.throughput.push(t, { tp: s.throughputMbps });
+      $('#tile-lastseg').textContent =
+        `${(s.bytes / 1024 / 1024).toFixed(2).replace('.', ',')} MB @ ${s.throughputMbps.toFixed(0)} Mbps`;
+    });
+  }
+  state.alertEngine = setupAlertEngine(model, isLive);
+
+  // VU meter em cadência própria (150 ms) para resposta visual adequada
+  state.vuTimer = setInterval(() => {
+    if (!state.audioMeter || !state.audioMeter.ok) return;
+    const a = state.audioMeter.sample();
+    if (!a) return;
+    state.lastAudio = a;
+    state.audioBinHz = a.binHz;
+    updateVuMeter('l', a.dbfsL, a.peakL);
+    updateVuMeter('r', a.dbfsR, a.peakR);
+    if (a.taintedSuspect) {
+      $('#audio-note').textContent =
+        'Sinal de áudio permanentemente zerado com o vídeo em reprodução — provável bloqueio de CORS ' +
+        '(mídia "tainted"): use o proxy local para liberar a medição.';
+    }
+  }, 150);
 
   state.timer = setInterval(() => {
     const t = (performance.now() - state.t0) / 1000;
@@ -545,6 +724,55 @@ function startTelemetry(model, isLive) {
 
     updateTiles(t);
 
+    // avanço do relógio de mídia (para distinguir freeze de pausa/stall)
+    state.timeAdvancing = video.currentTime > state.lastCurrentTime + 0.01;
+    state.lastCurrentTime = video.currentTime;
+
+    // áudio → série temporal
+    if (state.lastAudio) {
+      state.charts.audioLevel && state.charts.audioLevel.push(t, { l: state.lastAudio.dbfsL, r: state.lastAudio.dbfsR });
+      if (state.charts.spectrum) {
+        state.charts.spectrum.setSeriesData('s', Array.from(state.lastAudio.spectrum, (v, i) => [i, v]));
+      }
+    }
+
+    // QoE
+    if (state.qoe) {
+      state.qoe.tick();
+      if (level != null) state.qoe.noteBitrate(level);
+      if (state.qoe.fps != null) {
+        $('#tile-fps').textContent = state.qoe.fps.toFixed(1).replace('.', ',') +
+          (state.qoe.nominalFps ? ` / ${state.qoe.nominalFps}` : '');
+      }
+      if (Math.round(t * 2) % 4 === 0) updateQoeTiles(); // a cada ~2s
+    }
+
+    // latência E2E via PROGRAM-DATE-TIME
+    if (state.netmon) {
+      const e2e = state.netmon.e2eLatencySec(video);
+      if (e2e != null) {
+        $('#tile-e2e-box').hidden = false;
+        $('#tile-e2e').textContent = e2e.toFixed(1).replace('.', ',') + 's';
+      }
+    }
+
+    // alertas
+    if (state.alertEngine) {
+      state.alertEngine.evaluate(t, {
+        buffer: buf,
+        bwMbps: bw,
+        levelMbps: level,
+        dbfsMax: state.lastAudio ? Math.max(state.lastAudio.dbfsL, state.lastAudio.dbfsR) : null,
+        audioTainted: state.lastAudio ? state.lastAudio.taintedSuspect : false,
+        avgLuma: state.lastColor ? state.lastColor.avgLuma : null,
+        freezeDiff: state.lastFreezeDiff,
+        timeAdvancing: state.timeAdvancing,
+        fps: state.qoe ? state.qoe.fps : null,
+        nominalFps: state.qoe ? state.qoe.nominalFps : null,
+        manifestAgeSec: state.netmon && isLive ? state.netmon.manifestAgeSec() : null,
+      });
+    }
+
     // análise de cor a cada 3 ciclos (~1,5s)
     if (++colorTick % 3 === 0 && !state.drmBlocked) {
       const s = state.analyzer.sample();
@@ -561,9 +789,57 @@ function startTelemetry(model, isLive) {
         state.charts.lumaT.push(t, { apl: s.avgLuma, clipH: s.clipHighPct, clipL: s.clipLowPct });
         state.charts.chroma.setPoints(s.chromaPoints);
         $('#tile-apl').textContent = s.avgLuma.toFixed(1).replace('.', ',') + '%';
+
+        // assinatura do frame para detecção de congelamento
+        state.lastColor = s;
+        state.lastFreezeDiff = window.thumbDiff(state.lastThumb, s.thumb);
+        state.lastThumb = s.thumb;
       }
     }
   }, 500);
+}
+
+/** Atualiza uma barra do VU meter (ch = 'l'|'r'); dBFS -60..0 → 0..100%. */
+function updateVuMeter(ch, dbfs, peak) {
+  const pct = Math.max(0, Math.min(100, ((dbfs + 60) / 60) * 100));
+  const peakPct = Math.max(0, Math.min(100, ((peak + 60) / 60) * 100));
+  const cover = $(`#vu-${ch} .vu-cover`);
+  const marker = $(`#vu-${ch} .vu-peak`);
+  const label = $(`#vu-${ch} .vu-db`);
+  if (cover) cover.style.width = (100 - pct) + '%';
+  if (marker) marker.style.left = peakPct + '%';
+  if (label) label.textContent = dbfs <= -60 ? '−∞' : dbfs.toFixed(1).replace('.', ',') + ' dBFS';
+}
+
+function updateQoeTiles() {
+  if (!state.qoe) return;
+  const s = state.qoe.summary();
+  $('#qoe-startup').textContent = s.startupMs != null ? (s.startupMs / 1000).toFixed(2).replace('.', ',') + 's' : '—';
+  $('#qoe-watch').textContent = fmtClock(s.watchTimeSec);
+  $('#qoe-rebuffers').textContent = `${s.rebufferCount} (${s.rebufferTotalSec.toFixed(1).replace('.', ',')}s)`;
+  $('#qoe-ratio').textContent = s.rebufferRatioPct.toFixed(2).replace('.', ',') + '%';
+  $('#qoe-switches').textContent = String(s.abrSwitches);
+  $('#qoe-avgbitrate').textContent = s.avgBitrateMbps != null ? s.avgBitrateMbps.toFixed(2).replace('.', ',') + ' Mbps' : '—';
+  $('#qoe-fps').textContent = s.fps != null ? s.fps.toFixed(1).replace('.', ',') + (s.nominalFps ? ` / ${s.nominalFps}` : '') : '—';
+  $('#qoe-dropped').textContent = s.droppedFrames != null ? `${s.droppedFrames} / ${s.totalFrames}` : '—';
+}
+
+function exportSession(format) {
+  const exp = StreamQoe.buildSessionExport({
+    url: state.sessionUrl,
+    overview: state.sessionOverview,
+    qoe: state.qoe ? state.qoe.summary() : null,
+    alerts: state.alertEngine ? state.alertEngine.snapshot() : [],
+    events: Array.from($('#event-log').children).map((li) => li.textContent),
+    charts: state.charts,
+  });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  if (format === 'json') {
+    StreamQoe.downloadBlob(JSON.stringify(exp, null, 2), `stream-inspector-${stamp}.json`, 'application/json');
+  } else {
+    StreamQoe.downloadBlob(StreamQoe.sessionToCsv(exp), `stream-inspector-${stamp}.csv`, 'text/csv');
+  }
+  logEvent(`Sessão exportada em ${format.toUpperCase()}.`);
 }
 
 function startPlayback(type, url, model, isLive) {
@@ -593,7 +869,10 @@ function startPlayback(type, url, model, isLive) {
       hls.attachMedia(video);
       hls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
         const lv = hls.levels[d.level];
-        if (lv) logEvent(`Troca de nível → ${lv.width}×${lv.height} @ ${P.fmtBits(lv.bitrate)}`);
+        if (lv) {
+          logEvent(`Troca de nível → ${lv.width}×${lv.height} @ ${P.fmtBits(lv.bitrate)}`);
+          if (state.qoe) state.qoe.onLevelSwitch(lv.bitrate / 1e6);
+        }
       });
       hls.on(Hls.Events.ERROR, (_, d) => {
         logEvent(`Erro hls.js [${d.type}/${d.details}]${d.fatal ? ' (FATAL)' : ''}`);
@@ -612,7 +891,10 @@ function startPlayback(type, url, model, isLive) {
       if (e.mediaType !== 'video') return;
       try {
         const info = player.getBitrateInfoListFor('video')[e.newQuality];
-        if (info) logEvent(`Troca de nível → ${info.width}×${info.height} @ ${P.fmtBits(info.bitrate)}`);
+        if (info) {
+          logEvent(`Troca de nível → ${info.width}×${info.height} @ ${P.fmtBits(info.bitrate)}`);
+          if (state.qoe) state.qoe.onLevelSwitch(info.bitrate / 1e6);
+        }
       } catch { /* ignore */ }
     });
     player.on(dashjs.MediaPlayer.events.ERROR, (e) => {
@@ -622,7 +904,6 @@ function startPlayback(type, url, model, isLive) {
 
   video.muted = true;
   video.play().catch(() => logEvent('Autoplay bloqueado — clique no player para iniciar.'));
-  video.addEventListener('waiting', () => logEvent('Rebuffering (waiting)…'), { once: false });
 
   startTelemetry(model, isLive);
 }
@@ -648,7 +929,10 @@ async function startShakaPlayback(video, url, model, isLive) {
   });
   player.addEventListener('adaptation', () => {
     const active = player.getVariantTracks().find((t) => t.active);
-    if (active && active.width) logEvent(`Troca de nível → ${active.width}×${active.height} @ ${P.fmtBits(active.bandwidth)}`);
+    if (active && active.width) {
+      logEvent(`Troca de nível → ${active.width}×${active.height} @ ${P.fmtBits(active.bandwidth)}`);
+      if (state.qoe) state.qoe.onLevelSwitch(active.bandwidth / 1e6);
+    }
   });
   player.addEventListener('buffering', (e) => { if (e.buffering) logEvent('Rebuffering (buffering)…'); });
 
@@ -787,9 +1071,17 @@ async function inspect(url) {
     // Container real — não bloqueia o restante da UI
     probeContainer(model.protocol, resolvedMediaModel, model.protocol === 'DASH' ? model : null);
 
+    // contexto da sessão (exportação + alerta de playlist estagnada)
+    state.sessionUrl = url;
+    state.sessionOverview = { ...model.overview };
+    state.targetDuration = (resolvedMediaModel && resolvedMediaModel.targetDuration) ||
+      (model.segments && model.segments.targetDuration) || 6;
+
     // Playback + telemetria
     setupTelemetryCharts(isLive);
-    const playUrl = proxied ? proxify(url) : url;
+    const forceProxy = $('#force-proxy').checked;
+    const playUrl = proxied || forceProxy ? proxify(url) : url;
+    if (forceProxy && !proxied) logEvent('Playback forçado via proxy local (teste de rede habilitado).');
     setStatus('', '');
     startPlayback(type, playUrl, model, isLive);
     logEvent('Playback iniciado (mudo) para telemetria e análise de cor.');
@@ -832,4 +1124,36 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
+
+  // rebuffering no log — registrado uma única vez (o QoE tem os próprios listeners)
+  $('#video').addEventListener('waiting', () => logEvent('Rebuffering (waiting)…'));
+
+  // exportação de sessão
+  $('#btn-export-json').addEventListener('click', () => exportSession('json'));
+  $('#btn-export-csv').addEventListener('click', () => exportSession('csv'));
+
+  // thresholds de alerta aplicados ao vivo
+  for (const id of ['th-silence', 'th-freeze', 'th-buffer']) {
+    $('#' + id).addEventListener('change', () => {
+      if (state.alertEngine) state.alertEngine.thresholds = readThresholds();
+      logEvent('Thresholds de alerta atualizados.');
+    });
+  }
+
+  // teste de rede: limita a banda do proxy local
+  $('#throttle').addEventListener('change', async (e) => {
+    const kbps = Number(e.target.value);
+    try {
+      const r = await fetch('/throttle?kbps=' + kbps);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      logEvent(kbps > 0
+        ? `TESTE DE REDE: banda do proxy limitada a ${(kbps / 1000).toFixed(1).replace('.', ',')} Mbps.`
+        : 'TESTE DE REDE: limite de banda removido.');
+      if (kbps > 0 && !$('#force-proxy').checked && state.lastPlay && !state.lastPlay.url.startsWith('/p/')) {
+        logEvent('Atenção: o playback atual não passa pelo proxy — marque "Reproduzir via proxy" e inspecione de novo para o limite ter efeito.');
+      }
+    } catch (err) {
+      logEvent('Falha ao configurar o limite de banda (a página precisa ser servida pelo server.js): ' + err.message);
+    }
+  });
 });

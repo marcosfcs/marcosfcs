@@ -12,8 +12,13 @@ apresenta tudo o que a transmissão contém:
 | Legendas | legendas e closed captions: idioma, formato (WebVTT/TTML/CEA-608), forçada/padrão | tabela estática |
 | DRM | Widevine, PlayReady, FairPlay, ClearKey, AES (via `EXT-X-KEY`/`ContentProtection`), default_KID | tabela estática |
 | Segmentação | modo (SegmentTemplate/Timeline/playlist), contagem, durações, descontinuidades | tabela + **gráfico temporal estático** |
-| Telemetria | buffer de reprodução, bitrate do nível ativo, banda estimada, frames perdidos, latência live, trocas de ABR | **gráficos temporais dinâmicos** + tiles |
-| Análise de cor | **curvas de cor por canal RGB**, distribuição de luminância, luminância média (APL) e clipping de sombras/realces ao longo do tempo, sinalização SDR/HDR do manifest × capacidade do display | **gráficos de curva** + tabela |
+| Container real | inspeção binária de um segmento (PAT/PMT do MPEG-TS; moov/tenc/pssh do fMP4): streams reais, idiomas, KID/esquema de criptografia | tabela + indicadores |
+| Telemetria | buffer de reprodução, bitrate do nível ativo, banda estimada, frames perdidos, latência live (edge e E2E via PROGRAM-DATE-TIME), FPS real vs nominal, trocas de ABR | **gráficos temporais dinâmicos** + tiles |
+| Rede/CDN | TTFB e throughput por segmento baixado; **teste de rede** com limite de banda ajustável no proxy para provocar trocas de ladder ABR | gráficos temporais + seletor de throttle |
+| Áudio | VU meter L/R com peak-hold, nível RMS temporal (aprox. momentary), espectro de frequências, alarme de silêncio | medidores + gráficos |
+| Alertas | congelamento de vídeo, tela preta, silêncio, buffer baixo, banda insuficiente, FPS baixo, playlist live estagnada — com thresholds ajustáveis | painel de alertas + log |
+| QoE | startup (1º frame), rebuffering (contagem/duração/ratio), trocas ABR, bitrate médio ponderado; **exportação da sessão** completa | tiles + JSON/CSV |
+| Análise de cor | **curvas de cor por canal RGB**, distribuição de luminância, luminância média (APL) e clipping de sombras/realces ao longo do tempo, diagrama de cromaticidade CIE 1931 xy com gamuts Rec.709/P3/Rec.2020, sinalização SDR/HDR do manifest × capacidade do display | **gráficos de curva** + tabela |
 
 ## Como rodar
 

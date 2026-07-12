@@ -56,6 +56,12 @@ class ColorAnalyzer {
     const chromaStride = Math.max(1, Math.floor(n / 400)); // ~400 pontos por amostragem
     let pixelIndex = 0;
 
+    // thumbnail 16×9 em escala de cinza — assinatura barata do frame para
+    // detecção de congelamento (comparada entre amostras consecutivas)
+    const TW = 16, TH = 9;
+    const thumb = new Float32Array(TW * TH);
+    const thumbCount = new Uint16Array(TW * TH);
+
     for (let i = 0; i < n * 4; i += 4) {
       const r = img[i], g = img[i + 1], b = img[i + 2];
       histR[r]++; histG[g]++; histB[b]++;
@@ -69,8 +75,13 @@ class ColorAnalyzer {
         const xy = rgbToXy(r, g, b);
         if (xy) chromaPoints.push({ x: xy.x, y: xy.y, r, g, b });
       }
+      const px = pixelIndex % w, py = (pixelIndex / w) | 0;
+      const ti = Math.min(TH - 1, (py * TH / h) | 0) * TW + Math.min(TW - 1, (px * TW / w) | 0);
+      thumb[ti] += y;
+      thumbCount[ti]++;
       pixelIndex++;
     }
+    for (let i = 0; i < thumb.length; i++) if (thumbCount[i]) thumb[i] /= thumbCount[i];
 
     return {
       blocked: false,
@@ -83,8 +94,17 @@ class ColorAnalyzer {
       clipLowPct: (clipLow / n) * 100,
       clipHighPct: (clipHigh / n) * 100,
       chromaPoints,
+      thumb,
     };
   }
+}
+
+/** Diferença média absoluta entre dois thumbnails (0–255). */
+function thumbDiff(a, b) {
+  if (!a || !b || a.length !== b.length) return null;
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
+  return s / a.length;
 }
 
 /**
@@ -115,3 +135,4 @@ function displayHdrInfo() {
 
 window.ColorAnalyzer = ColorAnalyzer;
 window.displayHdrInfo = displayHdrInfo;
+window.thumbDiff = thumbDiff;
