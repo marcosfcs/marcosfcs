@@ -255,7 +255,7 @@ function handleProxy(req, res, urlPath, search) {
         if (upstream.headers[h]) passthrough[h] = upstream.headers[h];
       }
       res.writeHead(upstream.statusCode || 200, passthrough);
-      if (throttleKbps > 0) throttledPipe(upstream, res, (throttleKbps * 1000) / 8);
+      if (throttleKbps > 0) throttledPipe(upstream, res);
       else upstream.pipe(res);
       return;
     }
@@ -285,11 +285,17 @@ function handleProxy(req, res, urlPath, search) {
   });
 }
 
-/** Repassa src→dst limitado a bytesPerSec (pausa a origem entre chunks). */
-function throttledPipe(src, dst, bytesPerSec) {
+/**
+ * Repassa src→dst respeitando o throttleKbps VIGENTE a cada chunk —
+ * mudar o limite no meio de um download em andamento tem efeito
+ * imediato (inclusive removê-lo, kbps=0).
+ */
+function throttledPipe(src, dst) {
   src.on('data', (chunk) => {
     dst.write(chunk);
+    if (throttleKbps <= 0) return; // limite removido durante o download
     src.pause();
+    const bytesPerSec = (throttleKbps * 1000) / 8;
     const delayMs = (chunk.length / bytesPerSec) * 1000;
     setTimeout(() => { if (!src.destroyed) src.resume(); }, delayMs);
   });

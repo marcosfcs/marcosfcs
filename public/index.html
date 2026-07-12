@@ -99,18 +99,13 @@
             <label><input type="radio" name="engine" value="hlsjs" checked /> HLS.js</label>
             <label><input type="radio" name="engine" value="shaka" /> Shaka Player</label>
           </div>
-          <div class="net-test" title="Limita a velocidade com que o proxy local entrega os segmentos — observe no gráfico de bitrate como o ABR troca de perfil/ladder.">
+          <div class="net-test" title="Limita a velocidade com que o proxy local entrega os segmentos — observe no gráfico de bitrate como o ABR troca de perfil/ladder. O playback é redirecionado automaticamente para o proxy quando um limite é aplicado.">
             <span class="engine-picker-label">Teste de rede:</span>
-            <select id="throttle">
-              <option value="0" selected>Sem limite</option>
-              <option value="20000">20 Mbps</option>
-              <option value="10000">10 Mbps</option>
-              <option value="5000">5 Mbps</option>
-              <option value="3000">3 Mbps</option>
-              <option value="2000">2 Mbps</option>
-              <option value="1000">1 Mbps</option>
-              <option value="500">0,5 Mbps</option>
-            </select>
+            <input type="text" inputmode="decimal" id="throttle-mbps" placeholder="ex.: 2,5" />
+            <span class="engine-picker-label">Mbps</span>
+            <button type="button" id="btn-throttle-apply" class="btn-secondary">Aplicar</button>
+            <button type="button" id="btn-throttle-off" class="btn-secondary">Remover limite</button>
+            <span id="throttle-state" class="badge badge-info">Sem limite</span>
             <label><input type="checkbox" id="force-proxy" /> Reproduzir via proxy</label>
           </div>
           <video id="video" controls muted playsinline></video>

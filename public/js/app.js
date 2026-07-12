@@ -1140,20 +1140,59 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // teste de rede: limita a banda do proxy local
-  $('#throttle').addEventListener('change', async (e) => {
-    const kbps = Number(e.target.value);
-    try {
-      const r = await fetch('/throttle?kbps=' + kbps);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      logEvent(kbps > 0
-        ? `TESTE DE REDE: banda do proxy limitada a ${(kbps / 1000).toFixed(1).replace('.', ',')} Mbps.`
-        : 'TESTE DE REDE: limite de banda removido.');
-      if (kbps > 0 && !$('#force-proxy').checked && state.lastPlay && !state.lastPlay.url.startsWith('/p/')) {
-        logEvent('Atenção: o playback atual não passa pelo proxy — marque "Reproduzir via proxy" e inspecione de novo para o limite ter efeito.');
-      }
-    } catch (err) {
-      logEvent('Falha ao configurar o limite de banda (a página precisa ser servida pelo server.js): ' + err.message);
+  // teste de rede: limite customizado em Mbps, aplicado em tempo real
+  $('#btn-throttle-apply').addEventListener('click', () => {
+    const raw = $('#throttle-mbps').value.trim().replace(',', '.');
+    const mbps = parseFloat(raw);
+    if (!raw || isNaN(mbps) || mbps <= 0) {
+      logEvent('Teste de rede: informe um valor válido em Mbps (ex.: 2,5).');
+      return;
     }
+    applyThrottle(mbps);
+  });
+  $('#btn-throttle-off').addEventListener('click', () => applyThrottle(0));
+  $('#throttle-mbps').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); $('#btn-throttle-apply').click(); }
   });
 });
+
+/**
+ * Aplica o limite de banda (mbps; 0 = remover) no proxy local e, se o
+ * playback atual não passa pelo proxy, redireciona-o automaticamente —
+ * sem isso o limite nunca alcançaria os segmentos (eles iriam direto à
+ * CDN quando a origem tem CORS aberto).
+ */
+async function applyThrottle(mbps) {
+  const kbps = Math.round(mbps * 1000);
+  try {
+    const r = await fetch('/throttle?kbps=' + kbps);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+  } catch (err) {
+    logEvent('Falha ao configurar o limite de banda (a página precisa ser servida pelo server.js): ' + err.message);
+    return;
+  }
+
+  const chip = $('#throttle-state');
+  if (kbps > 0) {
+    chip.textContent = `Limite ativo: ${mbps.toFixed(1).replace('.', ',')} Mbps`;
+    chip.classList.add('badge-throttled');
+    logEvent(`TESTE DE REDE: banda do proxy limitada a ${mbps.toFixed(1).replace('.', ',')} Mbps.`);
+  } else {
+    chip.textContent = 'Sem limite';
+    chip.classList.remove('badge-throttled');
+    logEvent('TESTE DE REDE: limite de banda removido.');
+  }
+
+  // redirecionamento automático do playback para o proxy
+  if (kbps > 0 && state.lastPlay && !state.lastPlay.url.startsWith('/p/') && state.sessionUrl) {
+    const proxied = proxify(state.sessionUrl);
+    if (proxied !== state.lastPlay.url) {
+      $('#force-proxy').checked = true;
+      const { type, model, isLive } = state.lastPlay;
+      stopPlayback();
+      startPlayback(type, proxied, model, isLive);
+      logEvent('TESTE DE REDE: playback redirecionado para o proxy local para aplicar o limite.');
+      logEvent('Observação: a troca de perfil/ladder aparece quando o buffer do player drena (~10–30s) — comportamento normal do ABR.');
+    }
+  }
+}

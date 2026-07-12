@@ -202,10 +202,12 @@ h3 { margin: 18px 0 8px; font-size: 14px; color: var(--text-secondary); font-wei
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin-bottom: 8px; font-size: 13px; color: var(--text-secondary);
 }
-.net-test select {
-  padding: 4px 8px; border: 1px solid var(--baseline); border-radius: 6px;
+.net-test input[type="text"] {
+  width: 84px; padding: 4px 8px; border: 1px solid var(--baseline); border-radius: 6px;
   background: var(--page); color: var(--text-primary); font-size: 13px;
 }
+.net-test .btn-secondary { padding: 4px 12px; }
+#throttle-state.badge-throttled { color: #fff; background: var(--status-critical); border-color: transparent; }
 .net-test label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .net-test input { accent-color: var(--accent); cursor: pointer; }
 
