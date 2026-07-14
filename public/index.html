@@ -29,6 +29,9 @@
         <button type="button" data-example="/samples/master.m3u8">Amostra local HLS</button>
         <button type="button" data-example="/samples/manifest.mpd">Amostra local DASH</button>
       </div>
+      <p class="examples-note">Para URLs do YouTube (<code>youtube.com/watch</code>, <code>youtu.be</code>, lives): requer
+        <code>yt-dlp</code> instalado na máquina que roda o <code>server.js</code> (<code>pip install yt-dlp</code>).
+        O sistema apenas chama o yt-dlp como resolvedor local — uso sujeito aos Termos do YouTube.</p>
 
       <div id="status" class="status" hidden></div>
     </div>
@@ -244,6 +247,7 @@
   <script src="js/container.js"></script>
   <script src="js/charts.js"></script>
   <script src="js/chromaticity.js"></script>
+  <script src="js/youtube.js"></script>
   <script src="js/analyzer.js"></script>
   <script src="js/audiometer.js"></script>
   <script src="js/alerts.js"></script>

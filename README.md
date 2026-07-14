@@ -33,6 +33,28 @@ Também funciona hospedado como página estática (`public/`), porém **sem o pr
 de CORS** — nesse modo só é possível inspecionar streams cuja origem envie
 cabeçalhos CORS (`Access-Control-Allow-Origin`).
 
+## YouTube (opcional)
+
+URLs do YouTube (`youtube.com/watch`, `youtu.be`, lives) são suportadas através de
+um **resolvedor local** que delega ao [`yt-dlp`](https://github.com/yt-dlp/yt-dlp).
+O sistema **não** decodifica assinaturas do YouTube — apenas chama o yt-dlp (que
+você instala) e consome o JSON que ele produz. Pré-requisitos:
+
+```bash
+pip install yt-dlp       # ou pipx install yt-dlp
+node server.js           # o endpoint /resolve precisa do servidor
+```
+
+- **Ao vivo**: o yt-dlp extrai o master HLS real → o inspetor roda o pipeline
+  completo (variantes, segmentação, container, telemetria, cor) com paridade total.
+- **VOD**: o yt-dlp devolve formatos separados (não há manifest único). As tabelas
+  de vídeo/áudio/legendas são montadas do JSON do yt-dlp (inclusive formatos 4K/HDR
+  adaptativos), e a telemetria/cor/áudio/alertas/QoE rodam reproduzindo o melhor
+  formato **combinado** disponível (progressivo, tipicamente ≤720p).
+
+Uso sujeito aos Termos do YouTube — a ferramenta destina-se a inspeção técnica e a
+responsabilidade é de quem a opera.
+
 ## Arquitetura
 
 ```
@@ -43,6 +65,7 @@ public/
   js/parsers.js           parsers próprios de M3U8 e MPD → modelo normalizado
   js/charts.js            gráficos em canvas (séries temporais, curvas, degraus)
   js/analyzer.js          análise de cor por frame (histogramas RGB/luma, clipping)
+  js/youtube.js           mapeia o JSON do yt-dlp → modelo do inspetor (YouTube)
   js/app.js               orquestração: fetch → parse → tabelas → playback → telemetria
   vendor/hls.min.js       playback HLS (hls.js)
   vendor/dash.all.min.js  playback DASH (dash.js)

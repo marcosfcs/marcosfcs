@@ -359,7 +359,10 @@ async function probeContainer(protocol, hlsMediaModel, dashModel) {
   $('#container-note').textContent = '';
 
   let sampleUrl = null, kindHint = null;
-  if (protocol === 'HLS' && hlsMediaModel) {
+  if (protocol === 'directUrl' && hlsMediaModel) {
+    sampleUrl = hlsMediaModel;   // string com a URL de mídia direta (YouTube progressivo)
+    kindHint = 'fmp4';
+  } else if (protocol === 'HLS' && hlsMediaModel) {
     if (hlsMediaModel.maps && hlsMediaModel.maps.length) { sampleUrl = hlsMediaModel.maps[0]; kindHint = 'fmp4'; }
     else if (hlsMediaModel.segments && hlsMediaModel.segments.length) { sampleUrl = hlsMediaModel.segments[0].uri; kindHint = 'ts'; }
   } else if (protocol === 'DASH' && dashModel) {
@@ -848,6 +851,19 @@ function startPlayback(type, url, model, isLive) {
   $('#color-note-runtime').textContent = '';
   state.lastPlay = { type, url, model, isLive };
 
+  // Progressivo (YouTube VOD): arquivo único tocado direto pelo <video>,
+  // sem hls.js/dash.js/shaka. Telemetria/cor/áudio/QoE/alertas seguem;
+  // só não há eventos de ABR (formato fixo).
+  if (type === 'progressive') {
+    state.playerKind = 'progressive';
+    state.player = null;
+    video.src = url;
+    video.muted = true;
+    video.play().catch(() => logEvent('Autoplay bloqueado — clique no player para iniciar.'));
+    startTelemetry(model, isLive);
+    return;
+  }
+
   if (state.engine === 'shaka') {
     startShakaPlayback(video, url, model, isLive);
     return;
@@ -993,6 +1009,76 @@ function setStatus(msg, kind) {
   s.hidden = !msg;
 }
 
+/**
+ * Resolve uma URL do YouTube via /resolve (yt-dlp local) e alimenta o
+ * pipeline. Retorna true se tratou a requisição (ao vivo → delega ao
+ * fluxo de manifest normal; VOD → renderiza a partir do JSON do yt-dlp
+ * e reproduz o melhor formato progressivo).
+ */
+async function inspectYouTube(url) {
+  logEvent('URL do YouTube detectada — resolvendo via yt-dlp local (uso sujeito aos Termos do YouTube).');
+  setStatus('Resolvendo com yt-dlp…', 'busy');
+
+  let info;
+  try {
+    const r = await fetch('/resolve?url=' + encodeURIComponent(url));
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const hint = body.code === 'NO_YTDLP'
+        ? ' Instale o yt-dlp e sirva a página por "node server.js".'
+        : '';
+      setStatus('Não foi possível resolver a URL do YouTube: ' + (body.error || `HTTP ${r.status}`) + hint, 'error');
+      return true;
+    }
+    info = body;
+  } catch (e) {
+    setStatus('Falha ao chamar o resolvedor local (/resolve requer o server.js): ' + e.message, 'error');
+    return true;
+  }
+
+  logEvent(`YouTube: "${info.title || info.id}"${info.uploader ? ' — ' + info.uploader : ''} (${info.is_live ? 'AO VIVO' : 'VOD'}).`);
+  const src = StreamYouTube.pickPlaybackSource(info);
+  if (!src) {
+    setStatus('O yt-dlp não retornou um formato reproduzível para esta URL.', 'error');
+    return true;
+  }
+
+  // Ao vivo (ou fallback HLS): delega ao pipeline de manifest normal —
+  // paridade total (variantes, segmentação, container reais).
+  if (src.kind === 'hls') {
+    logEvent('YouTube ao vivo: master HLS resolvido — usando o pipeline de manifest completo.');
+    await inspect(src.url);
+    return true;
+  }
+
+  // VOD progressivo: tabelas a partir do JSON do yt-dlp + player no arquivo.
+  const model = StreamYouTube.buildModelFromYtInfo(info);
+  $('#results').hidden = false;
+  renderBadges(model);
+  renderKV($('#overview'), { ...model.overview, 'URL': url, 'Formato reproduzido': `${src.height || '—'}p (melhor progressivo combinado)` });
+  $('#raw-manifest').textContent = JSON.stringify(info, null, 2).slice(0, 200000);
+
+  renderTable($('#video-table'), VIDEO_COLUMNS, model.video || [], 'Nenhum formato de vídeo retornado.');
+  renderTable($('#audio-table'), AUDIO_COLUMNS, model.audio || [], 'Nenhuma faixa de áudio separada (pode estar muxada nos formatos progressivos).');
+  renderTable($('#subs-table'), SUB_COLUMNS, model.subtitles || [], 'Nenhuma legenda/closed caption retornada.');
+  renderTable($('#drm-table'), DRM_COLUMNS, [], 'Mídia do YouTube — sem DRM aplicável nos formatos entregues pelo yt-dlp.');
+  renderHdrPanel(model);
+  renderSegments(null);
+
+  state.sessionUrl = url;
+  state.sessionOverview = { ...model.overview };
+  state.targetDuration = 6;
+
+  logEvent('Observação: o player usa o melhor formato combinado (progressivo, tipicamente ≤720p); as tabelas listam todos os formatos, inclusive 4K/HDR adaptativos.');
+
+  probeContainer('directUrl', src.url, null);
+  setupTelemetryCharts(false);
+  setStatus('', '');
+  startPlayback('progressive', proxify(src.url), model, false);
+  logEvent('Playback iniciado (mudo) a partir do formato progressivo do YouTube.');
+  return true;
+}
+
 async function inspect(url) {
   const btn = $('#btn-run');
   btn.disabled = true;
@@ -1004,6 +1090,12 @@ async function inspect(url) {
   for (const k of Object.keys(state.charts)) destroyChart(k);
 
   try {
+    // YouTube: resolve via yt-dlp local antes de tudo
+    if (window.StreamYouTube && StreamYouTube.isYouTubeUrl(url)) {
+      const handled = await inspectYouTube(url);
+      if (handled) return;
+    }
+
     const { text, effectiveUrl, proxied } = await fetchManifest(url);
     const type = detectType(url, text);
     logEvent(`Manifest carregado ${proxied ? 'via proxy local' : 'diretamente'} (${text.length.toLocaleString('pt-BR')} bytes).`);
