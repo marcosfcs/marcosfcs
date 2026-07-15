@@ -312,6 +312,41 @@
       <h3>Evolução temporal — luminância média e clipping</h3>
       <div id="chart-luma-t"></div>
 
+      <h3>Análise de qualidade — PSNR / SSIM com referência</h3>
+      <p class="note">Requer uma referência (mezzanine) do <strong>mesmo conteúdo-fonte</strong> usado para
+        codificar o stream — comparar contra um vídeo diferente produz números sem significado (mede diferença
+        de conteúdo, não de qualidade). Isto é PSNR/SSIM reais; <strong>não é VMAF</strong> (o modelo certificado
+        da Netflix exige <code>libvmaf</code> via ffmpeg, offline — fora do escopo do navegador).</p>
+      <div class="quality-controls">
+        <label>Referência:
+          <select id="quality-ref-preset">
+            <optgroup label="Presets (Blender Foundation, CC-BY)"></optgroup>
+            <option value="local">Arquivo local…</option>
+          </select>
+        </label>
+        <input type="file" id="quality-ref-file" accept="video/*" hidden />
+        <label>Variante do stream: <select id="quality-variant"></select></label>
+        <button type="button" id="btn-quality-start" class="btn-secondary">Iniciar comparação</button>
+        <button type="button" id="btn-quality-stop" class="btn-secondary">Parar</button>
+        <span id="quality-status" class="hint"></span>
+      </div>
+      <video id="video-reference" muted playsinline class="quality-hidden-video"></video>
+      <video id="video-distorted" muted playsinline class="quality-hidden-video"></video>
+      <div class="tiles">
+        <div class="tile"><span class="tile-label">PSNR atual</span><span class="tile-value" id="tile-psnr">—</span></div>
+        <div class="tile"><span class="tile-label">SSIM atual</span><span class="tile-value" id="tile-ssim">—</span></div>
+      </div>
+      <div class="two-col">
+        <div>
+          <h3>PSNR ao longo do tempo</h3>
+          <div id="chart-quality-psnr"></div>
+        </div>
+        <div>
+          <h3>SSIM ao longo do tempo</h3>
+          <div id="chart-quality-ssim"></div>
+        </div>
+      </div>
+
       <h3>Cromaticidade CIE 1931 xy — frame atual (instantâneo)</h3>
       <p class="note">Cada ponto é um pixel amostrado do frame mais recente, na cor real dele, convertido para
         coordenadas de cromaticidade — mostra se o conteúdo está de fato usando um gamut mais amplo que o
@@ -340,6 +375,7 @@
   <script src="js/container.js"></script>
   <script src="js/charts.js"></script>
   <script src="js/chromaticity.js"></script>
+  <script src="js/quality.js"></script>
   <script src="js/youtube.js"></script>
   <script src="js/analyzer.js"></script>
   <script src="js/audiometer.js"></script>

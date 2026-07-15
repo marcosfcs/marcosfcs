@@ -48,6 +48,11 @@ const state = {
   colorSpaceProbe: null,
   cdnHeaders: {},      // header -> valor (última amostra vista)
   lufsIntegrated: null,
+
+  // análise de qualidade PSNR/SSIM
+  qualityCompare: null,
+  qualityTimer: null,
+  qualityPlayer: null,
 };
 
 if (window.shaka && shaka.polyfill && shaka.polyfill.installAll) shaka.polyfill.installAll();
@@ -451,6 +456,7 @@ function stopPlayback() {
   if (state.resTimingMon) { state.resTimingMon.destroy(); state.resTimingMon = null; }
   if (state.headerSniffer) { state.headerSniffer.destroy(); state.headerSniffer = null; }
   if (state.colorSpaceProbe) { state.colorSpaceProbe.destroy(); state.colorSpaceProbe = null; }
+  stopQualityCompare();
   state.lastThumb = null;
   state.lastFreezeDiff = null;
   state.lastAudio = null;
@@ -1188,6 +1194,156 @@ function renderAdBreaks(adBreaks) {
   renderTable($('#adbreaks-table'), ADBREAK_COLUMNS, adBreaks, '');
 }
 
+/* ================================================================ *
+ * Análise de qualidade — PSNR/SSIM com referência
+ * ================================================================ */
+
+function populateQualityVariantSelect(model) {
+  const sel = $('#quality-variant');
+  sel.innerHTML = '';
+  for (const [i, v] of (model.video || []).entries()) {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    const codec = (v.codecs || []).filter((c) => isVideo(c)).map(P.codecName).join(',') || (v.codecs || []).map(P.codecName).join(',');
+    opt.textContent = `${v.resolution} · ${P.fmtBits(v.bandwidth)} · ${codec}`;
+    sel.appendChild(opt);
+  }
+}
+
+/** Toca a variante ESPECÍFICA travada (sem ABR) no <video> oculto de comparação. */
+async function attachLockedVariant(video, model, variant) {
+  video.muted = true;
+  if (model.protocol === 'HLS') {
+    const hls = new Hls({ enableWorker: true });
+    state.qualityPlayer = hls;
+    const url = state.lastPlay && state.lastPlay.url.startsWith('/p/') ? proxify(variant.uri) : variant.uri;
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    await new Promise((resolve) => { hls.once(Hls.Events.MANIFEST_PARSED, resolve); hls.once(Hls.Events.ERROR, resolve); });
+  } else if (model.protocol === 'DASH') {
+    const player = dashjs.MediaPlayer().create();
+    state.qualityPlayer = player;
+    try { player.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: false } } } }); } catch { /* ignore */ }
+    player.initialize(video, state.lastPlay ? state.lastPlay.url : state.sessionUrl, true);
+    // dash.js não tem .once() — remove os dois listeners manualmente ao disparar o primeiro
+    await new Promise((resolve) => {
+      const onInit = () => { cleanup(); resolve(); };
+      const onError = () => { cleanup(); resolve(); };
+      const cleanup = () => {
+        player.off(dashjs.MediaPlayer.events.STREAM_INITIALIZED, onInit);
+        player.off(dashjs.MediaPlayer.events.ERROR, onError);
+      };
+      player.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, onInit);
+      player.on(dashjs.MediaPlayer.events.ERROR, onError);
+    });
+    try {
+      const list = player.getBitrateInfoListFor('video') || [];
+      let bestIdx = 0, bestDiff = Infinity;
+      list.forEach((b, i) => { const d = Math.abs(b.bitrate - (variant.bandwidth || 0)); if (d < bestDiff) { bestDiff = d; bestIdx = i; } });
+      player.setQualityFor('video', bestIdx);
+    } catch { /* ignore */ }
+  } else {
+    // progressivo (YouTube): só há um formato tocável — compara consigo mesmo
+    video.src = variant.uri;
+  }
+  video.play().catch(() => { /* autoplay pode exigir gesto do usuário */ });
+}
+
+async function startQualityCompare() {
+  const model = state.lastPlay ? state.lastPlay.model : null;
+  if (!model || !(model.video || []).length) {
+    $('#quality-status').textContent = 'Nenhuma variante de vídeo disponível para comparar.';
+    return;
+  }
+  const idx = Number($('#quality-variant').value || 0);
+  const variant = model.video[idx];
+  // HLS precisa da playlist própria da variante; DASH trava por bandwidth
+  // dentro do MPD completo (não tem uma URL individual por representação)
+  if (!variant || (model.protocol === 'HLS' && !variant.uri)) {
+    $('#quality-status').textContent = 'Esta variante não tem uma URL própria para travar.';
+    return;
+  }
+
+  let refUrl;
+  const presetId = $('#quality-ref-preset').value;
+  if (presetId === 'local') {
+    const file = $('#quality-ref-file').files[0];
+    if (!file) { $('#quality-status').textContent = 'Selecione um arquivo de referência.'; return; }
+    refUrl = URL.createObjectURL(file);
+  } else {
+    const preset = StreamQuality.REFERENCE_PRESETS.find((p) => p.id === presetId);
+    if (!preset) { $('#quality-status').textContent = 'Selecione um preset de referência.'; return; }
+    refUrl = preset.url;
+  }
+
+  stopQualityCompare();
+  $('#quality-status').textContent = 'Carregando referência e variante…';
+
+  const refVideo = $('#video-reference');
+  const distVideo = $('#video-distorted');
+  refVideo.src = refUrl;
+  refVideo.muted = true;
+  refVideo.play().catch(() => { /* segue mesmo assim; sample() aguarda readyState */ });
+
+  try {
+    await attachLockedVariant(distVideo, model, variant);
+  } catch (e) {
+    $('#quality-status').textContent = 'Erro ao carregar a variante: ' + e.message;
+    return;
+  }
+
+  destroyChart('qualityPsnr'); destroyChart('qualitySsim');
+  state.charts.qualityPsnr = new LineChart($('#chart-quality-psnr'), {
+    series: [{ key: 'psnr', label: 'PSNR', colorVar: '--series-1' }],
+    yFormat: (v) => v.toFixed(1) + ' dB',
+    xFormat: fmtClock, windowSec: 120, height: 180, yMin: 0, yMax: 60,
+  });
+  state.charts.qualitySsim = new LineChart($('#chart-quality-ssim'), {
+    series: [{ key: 'ssim', label: 'SSIM', colorVar: '--series-2' }],
+    yFormat: (v) => v.toFixed(3),
+    xFormat: fmtClock, windowSec: 120, height: 180, yMin: 0, yMax: 1,
+  });
+
+  state.qualityCompare = new StreamQuality.QualityCompare(refVideo, distVideo, { width: 320, height: 180 });
+  state.qualityT0 = performance.now();
+  $('#quality-status').textContent = 'Comparando…';
+
+  state.qualityTimer = setInterval(() => {
+    const t = (performance.now() - state.qualityT0) / 1000;
+    state.qualityCompare.maybeResync();
+    const s = state.qualityCompare.sample();
+    if (!s) return;
+    if (s.blocked) {
+      $('#quality-status').textContent = 'Bloqueado: leitura de pixels não permitida (CORS sem cabeçalhos, ou DRM).';
+      stopQualityCompare();
+      return;
+    }
+    state.charts.qualityPsnr && state.charts.qualityPsnr.push(t, { psnr: s.psnr });
+    state.charts.qualitySsim && state.charts.qualitySsim.push(t, { ssim: s.ssim });
+    $('#tile-psnr').textContent = s.psnr.toFixed(1) + ' dB';
+    $('#tile-ssim').textContent = s.ssim.toFixed(3);
+  }, 1000);
+}
+
+function stopQualityCompare() {
+  if (state.qualityTimer) { clearInterval(state.qualityTimer); state.qualityTimer = null; }
+  if (state.qualityPlayer) {
+    try {
+      if (state.qualityPlayer.destroy) state.qualityPlayer.destroy();
+      else if (state.qualityPlayer.reset) state.qualityPlayer.reset();
+    } catch { /* já destruído */ }
+    state.qualityPlayer = null;
+  }
+  const refVideo = $('#video-reference'), distVideo = $('#video-distorted');
+  if (refVideo) {
+    if (refVideo.src && refVideo.src.startsWith('blob:')) URL.revokeObjectURL(refVideo.src);
+    refVideo.removeAttribute('src'); refVideo.load();
+  }
+  if (distVideo) { distVideo.removeAttribute('src'); distVideo.load(); }
+  state.qualityCompare = null;
+  if ($('#quality-status')) $('#quality-status').textContent = '';
+}
+
 function setStatus(msg, kind) {
   const s = $('#status');
   s.textContent = msg || '';
@@ -1245,6 +1401,7 @@ async function inspectYouTube(url) {
   $('#raw-manifest').textContent = JSON.stringify(info, null, 2).slice(0, 200000);
 
   renderTable($('#video-table'), VIDEO_COLUMNS, model.video || [], 'Nenhum formato de vídeo retornado.');
+  populateQualityVariantSelect(model);
   renderTable($('#audio-table'), AUDIO_COLUMNS, model.audio || [], 'Nenhuma faixa de áudio separada (pode estar muxada nos formatos progressivos).');
   renderTable($('#subs-table'), SUB_COLUMNS, model.subtitles || [], 'Nenhuma legenda/closed caption retornada.');
   renderTable($('#drm-table'), DRM_COLUMNS, [], 'Mídia do YouTube — sem DRM aplicável nos formatos entregues pelo yt-dlp.');
@@ -1297,6 +1454,7 @@ async function inspect(url) {
     $('#raw-manifest').textContent = text.length > 200000 ? text.slice(0, 200000) + '\n… (truncado)' : text;
 
     renderTable($('#video-table'), VIDEO_COLUMNS, model.video || [], 'Nenhuma variante de vídeo declarada neste manifest.');
+    populateQualityVariantSelect(model);
     renderTable($('#audio-table'), AUDIO_COLUMNS, model.audio || [], 'Nenhuma faixa de áudio alternativa declarada (áudio pode estar muxado no vídeo).');
     renderTable($('#subs-table'), SUB_COLUMNS, [...(model.subtitles || []), ...(model.closedCaptions || [])], 'Nenhuma faixa de legendas/closed captions declarada.');
     renderTable($('#drm-table'), DRM_COLUMNS, (model.drm || []).length ? model.drm : [], 'Nenhum sistema de DRM/criptografia declarado no manifest.');
@@ -1398,6 +1556,23 @@ document.addEventListener('DOMContentLoaded', () => {
       inspect(b.dataset.example);
     });
   }
+
+  // presets de referência para análise de qualidade (PSNR/SSIM)
+  const presetGroup = $('#quality-ref-preset optgroup');
+  for (const p of StreamQuality.REFERENCE_PRESETS) {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = `${p.label} — ${p.category}`;
+    presetGroup.appendChild(opt);
+  }
+  $('#quality-ref-preset').addEventListener('change', (e) => {
+    $('#quality-ref-file').hidden = e.target.value !== 'local';
+  });
+  $('#quality-ref-file').addEventListener('change', () => {
+    if ($('#quality-ref-file').files.length) $('#quality-status').textContent = 'Arquivo selecionado. Clique em "Iniciar comparação".';
+  });
+  $('#btn-quality-start').addEventListener('click', () => startQualityCompare());
+  $('#btn-quality-stop').addEventListener('click', () => stopQualityCompare());
 
   for (const r of document.querySelectorAll('input[name="engine"]')) {
     r.addEventListener('change', (e) => {

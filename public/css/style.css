@@ -120,6 +120,18 @@ a { color: var(--accent); }
 .examples button:hover { border-color: var(--accent); color: var(--accent); }
 .examples-note { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); max-width: 860px; }
 
+.quality-controls {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+  margin: 10px 0; font-size: 13px; color: var(--text-secondary);
+}
+.quality-controls select {
+  padding: 4px 8px; margin-left: 6px; border: 1px solid var(--baseline); border-radius: 6px;
+  background: var(--page); color: var(--text-primary); font-size: 13px;
+}
+.quality-hidden-video {
+  position: absolute; width: 2px; height: 2px; opacity: 0.01; pointer-events: none;
+}
+
 .status { margin-top: 14px; padding: 10px 14px; border-radius: 8px; font-size: 14px; }
 .status.busy { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text-primary); }
 .status.error { background: color-mix(in srgb, var(--status-critical) 14%, transparent); color: var(--text-primary); }

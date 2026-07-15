@@ -21,11 +21,31 @@ apresenta tudo o que a transmissão contém:
 | QoE | startup (1º frame), rebuffering (contagem/duração/ratio), trocas ABR, bitrate médio ponderado; **exportação da sessão** completa | tiles + JSON/CSV |
 | Baixa latência / anúncios | detecção de LL-HLS (`EXT-X-PART`/`PRELOAD-HINT`/`SERVER-CONTROL`) e LL-DASH (`ServiceDescription/Latency`); marcadores SCTE-35 do manifest (`EXT-X-DATERANGE`/`CUE-OUT`, DASH `EventStream`) | linha na visão geral + tabela condicional |
 | Análise de cor | **curvas de cor por canal RGB**, distribuição de luminância, luminância média (APL) e clipping de sombras/realces ao longo do tempo, diagrama de cromaticidade CIE 1931 xy com gamuts Rec.709/P3/Rec.2020, sinalização SDR/HDR do manifest × capacidade do display × **espaço de cor realmente decodificado (WebCodecs)** | **gráficos de curva** + tabela |
+| Qualidade (PSNR/SSIM) | comparação em tempo real entre uma referência (mezzanine) e uma variante específica do stream — dois `<video>` ocultos sincronizados por `currentTime`, amostrados via canvas | tiles + gráficos temporais |
 
-**Sobre PSNR/VMAF**: não estão implementados — são métricas *com referência* (comparam o
-stream contra a fonte pristina original), e o inspetor só tem acesso ao stream já
-codificado. Um "VMAF" calculado sem a fonte de referência seria um número sem
-fundamento, não a métrica real.
+### Sobre PSNR/SSIM/VMAF
+
+**PSNR e SSIM estão implementados de verdade** (seção "Análise de qualidade" dentro de
+Player e telemetria) — mas são métricas *com referência*: só fazem sentido quando a
+referência é o **mesmo conteúdo-fonte** usado para codificar o stream. Comparar Big Buck
+Bunny contra um telejornal ao vivo produz números sem significado (mede diferença de
+conteúdo, não perda de qualidade). Use a lista de presets (filmes CC-BY da Blender
+Foundation, tocáveis direto no navegador) quando o stream inspecionado for codificado a
+partir desse conteúdo (ex.: `dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd`, um dos
+exemplos do topo da página, é literalmente Big Buck Bunny), ou **envie um arquivo local**
+quando você tiver a mezzanine do seu próprio conteúdo (inclusive esporte/telejornalismo —
+não existe hoje um acervo livre e pronto para navegador nessas categorias).
+
+**VMAF real não está implementado** — o modelo certificado da Netflix (VIF + DLM + motion
+via SVM) exige `libvmaf`, tipicamente via ffmpeg, como processo *offline*. Se você tiver
+ffmpeg com libvmaf compilado, gere o score comparando o master local contra um segmento
+baixado do stream:
+
+```bash
+ffmpeg -i distorcido.mp4 -i referencia.mp4 \
+  -lavfi "[0:v]scale=1920:1080[dist];[1:v]scale=1920:1080[ref];[dist][ref]libvmaf" \
+  -f null -
+```
 
 ## Como rodar
 
