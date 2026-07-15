@@ -4,8 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Stream Inspector — HLS / DASH</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap" />
   <link rel="stylesheet" href="css/style.css" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' style='background:%230E1124'><text x='50' y='68' font-size='60' text-anchor='middle' fill='%23D946EF'>S</text></svg>" />
   <script>
     // Instala o registro global de headers ANTES de qualquer script de vendor
     // (hls.js/dash.js/shaka) carregar — algumas dessas libs capturam uma
@@ -78,7 +81,8 @@
 <body>
   <header class="app-header">
     <div class="wrap">
-      <h1>📡 Stream Inspector</h1>
+      <span class="eyebrow">Plataforma de Distribuição · Playback &amp; Experience</span>
+      <h1>Stream Inspector</h1>
       <p class="subtitle">Inspeção completa de transmissões HLS (<code>.m3u8</code>) e MPEG-DASH (<code>.mpd</code>) —
         metadados, vídeo, áudio, legendas, DRM, telemetria em tempo real e curvas de cor para análise SDR/HDR.</p>
 
