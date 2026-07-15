@@ -6,6 +6,74 @@
   <title>Stream Inspector — HLS / DASH</title>
   <link rel="stylesheet" href="css/style.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>" />
+  <script>
+    // Instala o registro global de headers ANTES de qualquer script de vendor
+    // (hls.js/dash.js/shaka) carregar — algumas dessas libs capturam uma
+    // referência a fetch/XMLHttpRequest no próprio carregamento do script,
+    // então um monkeypatch feito depois (ex.: dentro do app.js, ao iniciar o
+    // playback) chegaria tarde demais para interceptar essas chamadas.
+    // js/netmon.js's HeaderSniffer só assina esse registro; não faz o patch.
+    (function () {
+      const SEGMENT_RE = /\.(ts|m4s|mp4|m4a|aac|webm|cmfv|cmfa)(\?|$)/i;
+      // também observa manifests com CMCD (?CMCD=...) — só assim conseguimos
+      // mostrar o CMCD que o player emite, já que muitos players só o anexam
+      // à requisição de manifest/playlist, não a cada segmento
+      const looksLikeSegment = (u) => SEGMENT_RE.test(u) || /\/p\/https?\//.test(u) || /[?&]CMCD=/.test(u);
+      const WANTED = [
+        'x-cache', 'x-served-by', 'x-amz-cf-id', 'x-amz-cf-pop', 'cf-ray', 'cf-cache-status',
+        'via', 'age', 'server', 'x-akamai-request-id', 'fastly-debug-digest',
+        'cmsd-static', 'cmsd-dynamic', 'cmcd', 'cmcd-request', 'cmcd-object', 'cmcd-session', 'cmcd-status',
+      ];
+      const subscribers = [];
+      window.__cdnHeaderSubscribe = (fn) => { subscribers.push(fn); return () => { const i = subscribers.indexOf(fn); if (i >= 0) subscribers.splice(i, 1); }; };
+      // sempre repassa URLs com CMCD (mesmo sem headers de CDN encontrados)
+      // — é o único jeito de mostrar o CMCD que o player emitiu
+      const emit = (url, found) => {
+        if (!/[?&]CMCD=/.test(url) && !Object.keys(found).length) return;
+        for (const fn of subscribers.slice()) fn(url, found);
+      };
+
+      const origFetch = window.fetch.bind(window);
+      window.fetch = function (input, init) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const p = origFetch(input, init);
+        if (looksLikeSegment(url)) {
+          p.then((res) => {
+            const found = {};
+            for (const h of WANTED) { const v = res.headers.get(h); if (v) found[h] = v; }
+            emit(url, found);
+          }).catch(() => {});
+        }
+        return p;
+      };
+
+      const origOpen = XMLHttpRequest.prototype.open;
+      const origSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+        this.__sniffUrl = url;
+        return origOpen.call(this, method, url, ...rest);
+      };
+      XMLHttpRequest.prototype.send = function (...args) {
+        if (this.__sniffUrl && looksLikeSegment(this.__sniffUrl)) {
+          const url = this.__sniffUrl;
+          this.addEventListener('readystatechange', function () {
+            if (this.readyState !== this.HEADERS_RECEIVED && this.readyState !== this.DONE) return;
+            let raw;
+            try { raw = this.getAllResponseHeaders(); } catch { return; }
+            const found = {};
+            for (const line of raw.trim().split(/\r?\n/)) {
+              const idx = line.indexOf(':');
+              if (idx < 0) continue;
+              const k = line.slice(0, idx).trim().toLowerCase();
+              if (WANTED.includes(k)) found[k] = line.slice(idx + 1).trim();
+            }
+            emit(url, found);
+          });
+        }
+        return origSend.apply(this, args);
+      };
+    })();
+  </script>
 </head>
 <body>
   <header class="app-header">
@@ -127,7 +195,8 @@
           </div>
         </div>
         <div class="charts-col">
-          <h3>Buffer de reprodução</h3>
+          <h3>Buffer de reprodução <span class="hint">(intervalos reais de video.buffered)</span></h3>
+          <div id="buffer-timeline"></div>
           <div id="chart-buffer"></div>
           <h3>Bitrate e banda</h3>
           <div id="chart-bitrate"></div>
@@ -135,7 +204,7 @@
       </div>
       <div class="two-col">
         <div>
-          <h3>TTFB por segmento <span class="hint">(hls.js e dash.js; o Shaka não expõe TTFB)</span></h3>
+          <h3>TTFB por segmento <span class="hint">(via Resource Timing quando disponível; senão, do motor)</span></h3>
           <div id="chart-ttfb"></div>
         </div>
         <div>
@@ -143,6 +212,19 @@
           <div id="chart-throughput"></div>
         </div>
       </div>
+      <h3>Breakdown de rede por segmento <span class="hint">(DNS/TCP/TLS via Resource Timing API — independente do motor)</span></h3>
+      <div id="network-breakdown-table"></div>
+      <h3>CDN / edge <span class="hint">(headers de cache/PoP — só disponível via proxy local ou quando a origem expõe via CORS; não alcança o &lt;video&gt; nativo do progressivo do YouTube)</span></h3>
+      <div id="cdn-table"></div>
+      <h3>CMCD / CMSD <span class="hint">(dados operacionais padronizados trocados com o CDN)</span></h3>
+      <div id="cmcd-overview"></div>
+    </section>
+
+    <section id="sec-adbreaks" hidden>
+      <h2>Marcadores de anúncio (SCTE-35) <span class="badge badge-info">manifest</span></h2>
+      <p class="note">Detectado no próprio manifest — <code>EXT-X-DATERANGE</code>/<code>CUE-OUT</code>/<code>CUE-IN</code> (HLS)
+        ou <code>EventStream</code> (DASH). Complementa (não substitui) o PID SCTE-35 já detectado na inspeção de container.</p>
+      <div id="adbreaks-table"></div>
     </section>
 
     <section>
@@ -160,9 +242,15 @@
           <span class="vu-db">—</span>
         </div>
       </div>
+      <div class="tiles">
+        <div class="tile"><span class="tile-label">LUFS Momentary</span><span class="tile-value" id="tile-lufs-m">—</span></div>
+        <div class="tile"><span class="tile-label">LUFS Short-term</span><span class="tile-value" id="tile-lufs-s">—</span></div>
+        <div class="tile"><span class="tile-label">LUFS Integrated</span><span class="tile-value" id="tile-lufs-i">—</span></div>
+      </div>
+      <p id="lufs-note" class="note"></p>
       <div class="two-col">
         <div>
-          <h3>Nível RMS por canal <span class="hint">(aproximação "momentary"; não é LUFS)</span></h3>
+          <h3>Nível RMS por canal <span class="hint">(VU rápido — não é LUFS)</span></h3>
           <div id="chart-audio-level"></div>
         </div>
         <div>
@@ -170,6 +258,8 @@
           <div id="chart-spectrum"></div>
         </div>
       </div>
+      <h3>LUFS ao longo do tempo <span class="hint">(ITU-R BS.1770-4 — K-weighting real)</span></h3>
+      <div id="chart-lufs"></div>
     </section>
 
     <section>
@@ -178,6 +268,7 @@
         <label>Silêncio abaixo de <input type="number" id="th-silence" value="-50" step="1" max="0" min="-60" /> dBFS</label>
         <label>Congelamento após <input type="number" id="th-freeze" value="5" step="1" min="2" max="60" /> s</label>
         <label>Buffer baixo &lt; <input type="number" id="th-buffer" value="2" step="0.5" min="0.5" max="30" /> s</label>
+        <label>Loudness acima de <input type="number" id="th-lufs" value="-23" step="1" min="-40" max="0" /> LUFS (Integrated)</label>
       </div>
       <div id="alert-list"></div>
     </section>
@@ -206,6 +297,8 @@
       <div id="hdr-overview"></div>
       <p id="color-note-hdr" class="note"></p>
       <p id="color-note-runtime" class="note warn"></p>
+      <h3>Espaço de cor realmente decodificado <span class="hint">(WebCodecs — sem passar por canvas/tone-mapping; hoje só Chromium)</span></h3>
+      <div id="colorspace-overview"></div>
       <div class="two-col">
         <div>
           <h3>Curvas de cor por canal (histograma RGB do frame)</h3>
@@ -253,6 +346,7 @@
   <script src="js/alerts.js"></script>
   <script src="js/qoe.js"></script>
   <script src="js/netmon.js"></script>
+  <script src="js/colorspace.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

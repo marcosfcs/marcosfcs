@@ -266,12 +266,13 @@ function parseMediaPlaylist(lines, baseUrl) {
     protocol: 'HLS', kind: 'media',
     version: null, targetDuration: null, mediaSequence: 0,
     playlistType: null, live: true, drm: [], maps: [],
-    segments: [],
+    segments: [], lowLatency: null, adBreaks: [], partsSeen: 0,
   };
   let segAttrs = { duration: null, title: null, discontinuity: false, pdt: null, byterange: null };
   let currentKey = null;
   let discontinuities = 0;
   let start = 0;
+  let cueOutOpen = null;
 
   for (const raw of lines) {
     const line = raw.trim();
@@ -294,6 +295,46 @@ function parseMediaPlaylist(lines, baseUrl) {
     } else if (line.startsWith('#EXT-X-MAP:')) {
       const a = parseAttrs(line.slice('#EXT-X-MAP:'.length));
       model.maps.push(resolveUrl(a.URI, baseUrl));
+    } else if (line.startsWith('#EXT-X-SERVER-CONTROL:')) {
+      const a = parseAttrs(line.slice('#EXT-X-SERVER-CONTROL:'.length));
+      model.lowLatency = {
+        canBlockReload: a['CAN-BLOCK-RELOAD'] === 'YES',
+        partHoldBack: a['PART-HOLD-BACK'] ? Number(a['PART-HOLD-BACK']) : null,
+        canSkipUntil: a['CAN-SKIP-UNTIL'] ? Number(a['CAN-SKIP-UNTIL']) : null,
+      };
+    } else if (line.startsWith('#EXT-X-PART:')) {
+      model.partsSeen++;
+    } else if (line.startsWith('#EXT-X-PRELOAD-HINT:')) {
+      if (!model.lowLatency) model.lowLatency = {};
+      model.lowLatency.preloadHint = true;
+    } else if (line.startsWith('#EXT-X-SKIP:')) {
+      const a = parseAttrs(line.slice('#EXT-X-SKIP:'.length));
+      if (!model.lowLatency) model.lowLatency = {};
+      model.lowLatency.skippedSegments = Number(a['SKIPPED-SEGMENTS']) || 0;
+    } else if (line.startsWith('#EXT-X-DATERANGE:')) {
+      const a = parseAttrs(line.slice('#EXT-X-DATERANGE:'.length));
+      if (a['SCTE35-OUT'] || a['SCTE35-IN'] || /ad|interstitial|scte/i.test(a.CLASS || '')) {
+        model.adBreaks.push({
+          id: a.ID || '—', start: a['START-DATE'] || '—',
+          duration: a.DURATION ? Number(a.DURATION) : (a['PLANNED-DURATION'] ? Number(a['PLANNED-DURATION']) : null),
+          type: a['SCTE35-OUT'] ? 'SCTE35-OUT' : (a['SCTE35-IN'] ? 'SCTE35-IN' : a.CLASS),
+          source: 'EXT-X-DATERANGE',
+        });
+      }
+    } else if (line.startsWith('#EXT-X-CUE-OUT-CONT')) {
+      // continuação de um break já aberto — nada a fazer além de manter o estado
+    } else if (line.startsWith('#EXT-X-CUE-OUT')) {
+      const durMatch = line.match(/CUE-OUT:?\s*([\d.]+)?/);
+      cueOutOpen = { start: start, duration: durMatch && durMatch[1] ? Number(durMatch[1]) : null };
+    } else if (line.startsWith('#EXT-X-CUE-IN')) {
+      if (cueOutOpen) {
+        model.adBreaks.push({
+          id: '—', start: fmtDur(cueOutOpen.start),
+          duration: cueOutOpen.duration ?? (start - cueOutOpen.start),
+          type: 'CUE-OUT/CUE-IN', source: 'EXT-X-CUE',
+        });
+        cueOutOpen = null;
+      }
     } else if (line.startsWith('#EXTINF:')) {
       const body = line.slice('#EXTINF:'.length);
       const comma = body.indexOf(',');
@@ -331,8 +372,20 @@ function parseMediaPlaylist(lines, baseUrl) {
     'Duração total': fmtDur(total),
     'Descontinuidades': String(discontinuities),
     'Criptografia': model.drm.length ? model.drm.map((d) => d.system).join(', ') : 'Nenhuma',
+    'Low-Latency HLS': lowLatencySummary(model.lowLatency, model.partsSeen),
   };
   return model;
+}
+
+function lowLatencySummary(ll, partsSeen) {
+  if (!ll && !partsSeen) return 'Não detectado';
+  const bits = [];
+  if (ll && ll.canBlockReload) bits.push('blocking reload');
+  if (partsSeen) bits.push(`${partsSeen} partes`);
+  if (ll && ll.partHoldBack) bits.push(`hold-back ${ll.partHoldBack}s`);
+  if (ll && ll.preloadHint) bits.push('preload hint');
+  if (ll && ll.skippedSegments) bits.push(`delta update (${ll.skippedSegments} pulados)`);
+  return bits.length ? 'Sim — ' + bits.join(', ') : 'Sim';
 }
 
 /* ================================================================ *
@@ -379,11 +432,20 @@ function parseMPD(xmlText, baseUrl) {
     protocol: 'DASH', kind: 'master',
     type: firstAttr(mpd, 'type') || 'static',
     video: [], audio: [], subtitles: [], closedCaptions: [], drm: [],
-    periods: [],
+    periods: [], adBreaks: [], lowLatency: null,
   };
   const live = model.type === 'dynamic';
   const mediaDuration = parseISODuration(firstAttr(mpd, 'mediaPresentationDuration'));
   const drmSeen = new Map();
+
+  const svcDesc = mpd.querySelector('ServiceDescription > Latency');
+  if (svcDesc) {
+    model.lowLatency = {
+      target: svcDesc.getAttribute('target') ? Number(svcDesc.getAttribute('target')) / 1000 : null,
+      min: svcDesc.getAttribute('min') ? Number(svcDesc.getAttribute('min')) / 1000 : null,
+      max: svcDesc.getAttribute('max') ? Number(svcDesc.getAttribute('max')) / 1000 : null,
+    };
+  }
 
   const periods = Array.from(mpd.getElementsByTagName('Period'));
   periods.forEach((periodEl, pi) => {
@@ -394,6 +456,21 @@ function parseMPD(xmlText, baseUrl) {
       adaptationSets: 0,
     };
     model.periods.push(period);
+
+    for (const esEl of Array.from(periodEl.getElementsByTagName('EventStream'))) {
+      const scheme = (esEl.getAttribute('schemeIdUri') || '').toLowerCase();
+      if (!/scte35|dash:event/i.test(scheme)) continue;
+      const timescale = Number(esEl.getAttribute('timescale')) || 1;
+      for (const evEl of Array.from(esEl.getElementsByTagName('Event'))) {
+        const presentationTime = Number(evEl.getAttribute('presentationTime') || 0) / timescale;
+        const duration = evEl.getAttribute('duration') ? Number(evEl.getAttribute('duration')) / timescale : null;
+        model.adBreaks.push({
+          id: evEl.getAttribute('id') || '—',
+          start: fmtDur((period.start || 0) + presentationTime),
+          duration, type: 'EventStream (SCTE-35)', source: 'DASH EventStream',
+        });
+      }
+    }
 
     for (const asEl of Array.from(periodEl.getElementsByTagName('AdaptationSet'))) {
       period.adaptationSets++;
@@ -511,6 +588,9 @@ function parseMPD(xmlText, baseUrl) {
     'Atualização mínima (live)': firstAttr(mpd, 'minimumUpdatePeriod') ? fmtDur(parseISODuration(firstAttr(mpd, 'minimumUpdatePeriod'))) : '—',
     'Publicado em': firstAttr(mpd, 'publishTime') || '—',
     'DRM': model.drm.length ? model.drm.map((d) => d.system).join(', ') : 'Nenhum declarado',
+    'Low-Latency DASH': model.lowLatency
+      ? `Sim — alvo ${model.lowLatency.target ?? '—'}s (min ${model.lowLatency.min ?? '—'}s / max ${model.lowLatency.max ?? '—'}s)`
+      : 'Não detectado',
   };
   return model;
 }

@@ -252,7 +252,15 @@ function handleProxy(req, res, urlPath, search) {
     const rewritable = isM3U8(finalUrl, contentType) || isMPD(finalUrl, contentType);
     if (!rewritable) {
       const passthrough = { ...baseHeaders };
-      for (const h of ['content-length', 'content-range', 'accept-ranges']) {
+      for (const h of [
+        'content-length', 'content-range', 'accept-ranges',
+        // identificação de CDN/edge + CMSD/CMCD-eco, repassados para o
+        // painel "CDN / edge" do inspetor (só chegam aqui quando o
+        // tráfego passa por este proxy)
+        'x-cache', 'x-served-by', 'x-amz-cf-id', 'x-amz-cf-pop', 'cf-ray', 'cf-cache-status',
+        'via', 'age', 'server', 'x-akamai-request-id', 'fastly-debug-digest',
+        'cmsd-static', 'cmsd-dynamic',
+      ]) {
         if (upstream.headers[h]) passthrough[h] = upstream.headers[h];
       }
       res.writeHead(upstream.statusCode || 200, passthrough);

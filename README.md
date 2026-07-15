@@ -13,12 +13,19 @@ apresenta tudo o que a transmissão contém:
 | DRM | Widevine, PlayReady, FairPlay, ClearKey, AES (via `EXT-X-KEY`/`ContentProtection`), default_KID | tabela estática |
 | Segmentação | modo (SegmentTemplate/Timeline/playlist), contagem, durações, descontinuidades | tabela + **gráfico temporal estático** |
 | Container real | inspeção binária de um segmento (PAT/PMT do MPEG-TS; moov/tenc/pssh do fMP4): streams reais, idiomas, KID/esquema de criptografia | tabela + indicadores |
-| Telemetria | buffer de reprodução, bitrate do nível ativo, banda estimada, frames perdidos, latência live (edge e E2E via PROGRAM-DATE-TIME), FPS real vs nominal, trocas de ABR | **gráficos temporais dinâmicos** + tiles |
-| Rede/CDN | TTFB e throughput por segmento baixado; **teste de rede** com limite de banda ajustável no proxy para provocar trocas de ladder ABR | gráficos temporais + seletor de throttle |
-| Áudio | VU meter L/R com peak-hold, nível RMS temporal (aprox. momentary), espectro de frequências, alarme de silêncio | medidores + gráficos |
-| Alertas | congelamento de vídeo, tela preta, silêncio, buffer baixo, banda insuficiente, FPS baixo, playlist live estagnada — com thresholds ajustáveis | painel de alertas + log |
+| Telemetria | buffer de reprodução (escalar + **timeline real de `video.buffered`**), bitrate do nível ativo, banda estimada, frames perdidos, latência live (edge e E2E via PROGRAM-DATE-TIME), FPS real vs nominal, trocas de ABR | **gráficos temporais dinâmicos** + tiles |
+| Rede/CDN | TTFB e throughput por segmento (via adaptador do motor **e** via Resource Timing API — independente do motor, cobre Shaka e o progressivo do YouTube); **breakdown DNS/TCP/TLS/TTFB/download**; headers de **CDN/edge** (x-cache, cf-ray, via…); **teste de rede** com limite de banda ajustável no proxy para provocar trocas de ladder ABR | gráficos + tabelas + seletor de throttle |
+| CMCD / CMSD | CMCD habilitado nos três motores (o que o player envia ao CDN) e leitura de CMSD (o que o CDN responde), quando presente | painel |
+| Áudio | VU meter L/R com peak-hold, nível RMS temporal (rápido), espectro de frequências, e **LUFS real (ITU-R BS.1770-4)** — Momentary/Short-term/Integrated com K-weighting e gating de verdade | medidores + gráficos |
+| Alertas | congelamento de vídeo, tela preta, silêncio, buffer baixo, banda insuficiente, FPS baixo, loudness acima do limite, playlist live estagnada — com thresholds ajustáveis | painel de alertas + log |
 | QoE | startup (1º frame), rebuffering (contagem/duração/ratio), trocas ABR, bitrate médio ponderado; **exportação da sessão** completa | tiles + JSON/CSV |
-| Análise de cor | **curvas de cor por canal RGB**, distribuição de luminância, luminância média (APL) e clipping de sombras/realces ao longo do tempo, diagrama de cromaticidade CIE 1931 xy com gamuts Rec.709/P3/Rec.2020, sinalização SDR/HDR do manifest × capacidade do display | **gráficos de curva** + tabela |
+| Baixa latência / anúncios | detecção de LL-HLS (`EXT-X-PART`/`PRELOAD-HINT`/`SERVER-CONTROL`) e LL-DASH (`ServiceDescription/Latency`); marcadores SCTE-35 do manifest (`EXT-X-DATERANGE`/`CUE-OUT`, DASH `EventStream`) | linha na visão geral + tabela condicional |
+| Análise de cor | **curvas de cor por canal RGB**, distribuição de luminância, luminância média (APL) e clipping de sombras/realces ao longo do tempo, diagrama de cromaticidade CIE 1931 xy com gamuts Rec.709/P3/Rec.2020, sinalização SDR/HDR do manifest × capacidade do display × **espaço de cor realmente decodificado (WebCodecs)** | **gráficos de curva** + tabela |
+
+**Sobre PSNR/VMAF**: não estão implementados — são métricas *com referência* (comparam o
+stream contra a fonte pristina original), e o inspetor só tem acesso ao stream já
+codificado. Um "VMAF" calculado sem a fonte de referência seria um número sem
+fundamento, não a métrica real.
 
 ## Como rodar
 

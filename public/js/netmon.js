@@ -144,4 +144,116 @@ class NetMonitor {
   }
 }
 
+/* ================================================================ *
+ * Resource Timing API — rede real, independente do motor de playback
+ * ================================================================ */
+
+const SEGMENT_URL_RE = /\.(ts|m4s|mp4|m4a|aac|webm|cmfv|cmfa)(\?|$)/i;
+function looksLikeSegmentUrl(url) {
+  return SEGMENT_URL_RE.test(url) || /\/p\/https?\//.test(url);
+}
+
+/**
+ * Observa PerformanceResourceTiming para requisições de segmento —
+ * funciona para QUALQUER motor (inclusive Shaka, que não expõe TTFB
+ * via API própria, e o `<video src>` progressivo do YouTube, que não
+ * tem nenhum hook de rede próprio).
+ *
+ * Limitação do próprio navegador: para origens cross-origin sem o
+ * header `Timing-Allow-Origin`, a spec zera dns/tcp/tls/ttfb (só
+ * duration e transferSize sobrevivem) — reportado como "detalhe
+ * indisponível" em vez de zero enganoso.
+ */
+class ResourceTimingMonitor {
+  constructor(onSample) {
+    this.onSample = onSample;
+    this.seen = new Set();
+    this._obs = null;
+    if (typeof PerformanceObserver === 'undefined') return;
+    try {
+      this._obs = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) this._maybeEmit(e);
+      });
+      this._obs.observe({ entryTypes: ['resource'] });
+    } catch {
+      this._obs = null;
+    }
+    // evita estourar o buffer padrão (~250 entradas) do navegador
+    this._clearTimer = setInterval(() => {
+      try { performance.clearResourceTimings(); } catch { /* não suportado */ }
+    }, 15000);
+  }
+
+  destroy() {
+    if (this._obs) this._obs.disconnect();
+    if (this._clearTimer) clearInterval(this._clearTimer);
+  }
+
+  _maybeEmit(entry) {
+    if (!looksLikeSegmentUrl(entry.name)) return;
+    const id = entry.name + '|' + entry.startTime;
+    if (this.seen.has(id)) return;
+    this.seen.add(id);
+    if (this.seen.size > 1000) this.seen = new Set([...this.seen].slice(-300));
+
+    const hasDetail = entry.domainLookupEnd > 0 || entry.connectEnd > 0 || entry.responseStart > 0;
+    const dns = entry.domainLookupEnd > entry.domainLookupStart ? entry.domainLookupEnd - entry.domainLookupStart : 0;
+    const tcp = entry.connectEnd > entry.connectStart ? entry.connectEnd - entry.connectStart : 0;
+    const tls = entry.secureConnectionStart > 0 ? entry.connectEnd - entry.secureConnectionStart : 0;
+    const ttfb = entry.responseStart > entry.requestStart ? entry.responseStart - entry.requestStart : null;
+    const download = entry.responseEnd > entry.responseStart
+      ? entry.responseEnd - entry.responseStart
+      : entry.duration;
+    const bytes = entry.transferSize || entry.encodedBodySize || 0;
+
+    this.onSample({
+      url: entry.name,
+      detailAvailable: hasDetail,
+      dnsMs: dns, tcpMs: tcp, tlsMs: tls,
+      ttfbMs: ttfb,
+      downloadMs: Math.max(1, download || entry.duration || 1),
+      throughputMbps: bytes > 0 && download > 0 ? (bytes * 8) / download / 1000 : null,
+      bytes,
+      totalMs: entry.duration,
+    });
+  }
+}
+
+/* ================================================================ *
+ * Captura de headers de CDN/edge (e CMSD) — apenas ASSINA o registro
+ * global instalado por um <script> inline no <head> de index.html,
+ * ANTES de hls.js/dash.js/shaka carregarem. Necessário porque essas
+ * libs podem capturar uma referência a fetch/XMLHttpRequest no próprio
+ * carregamento do script; um monkeypatch feito depois (ex.: só quando
+ * o playback inicia) chegaria tarde demais para essa captura.
+ * Funciona com qualquer motor, MAS não alcança o <video src> nativo do
+ * progressivo do YouTube (o navegador busca por conta própria).
+ * ================================================================ */
+
+class HeaderSniffer {
+  constructor(onHeaders) {
+    this.onHeaders = onHeaders;
+    this._unsubscribe = window.__cdnHeaderSubscribe
+      ? window.__cdnHeaderSubscribe((url, headers) => this.onHeaders(url, headers))
+      : null;
+  }
+
+  destroy() {
+    if (this._unsubscribe) this._unsubscribe();
+  }
+}
+
+/** Parseia CMSD-Static/CMSD-Dynamic (RFC "Structured Field Values", forma chave=valor,chave). */
+function parseCmsd(value) {
+  const out = {};
+  for (const part of value.split(',')) {
+    const m = part.trim().match(/^([a-z0-9_-]+)(?:=(.+))?$/i);
+    if (m) out[m[1]] = m[2] !== undefined ? m[2].replace(/^"|"$/g, '') : true;
+  }
+  return out;
+}
+
 window.NetMonitor = NetMonitor;
+window.ResourceTimingMonitor = ResourceTimingMonitor;
+window.HeaderSniffer = HeaderSniffer;
+window.parseCmsd = parseCmsd;

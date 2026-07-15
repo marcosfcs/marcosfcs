@@ -321,5 +321,109 @@ class LineChart {
   }
 }
 
+/**
+ * Timeline de buffer (Gantt): mostra os intervalos REAIS de
+ * `video.buffered` (não um escalar "buffer à frente") com a posição
+ * do playhead marcada — revela gaps/stalls que um número só não mostra.
+ */
+class BufferTimeline {
+  constructor(container, opts) {
+    this.container = container;
+    this.opts = Object.assign({ height: 46, windowSec: 60 }, opts);
+    container.classList.add('chart-box');
+    this.canvas = document.createElement('canvas');
+    this.canvas.className = 'chart-canvas';
+    this.canvas.style.height = this.opts.height + 'px';
+    container.appendChild(this.canvas);
+    this.ctx = this.canvas.getContext('2d');
+    this.ranges = [];
+    this.currentTime = 0;
+    this.duration = null;
+    this._ro = new ResizeObserver(() => this.draw());
+    this._ro.observe(container);
+    this._mq = matchMedia('(prefers-color-scheme: dark)');
+    this._mqHandler = () => this.draw();
+    this._mq.addEventListener('change', this._mqHandler);
+    this.draw();
+  }
+
+  destroy() {
+    this._ro.disconnect();
+    this._mq.removeEventListener('change', this._mqHandler);
+    this.container.innerHTML = '';
+    this.container.classList.remove('chart-box');
+  }
+
+  /** Atualiza a partir de um TimeRanges (video.buffered) + posição atual. */
+  update(buffered, currentTime, duration) {
+    const ranges = [];
+    for (let i = 0; i < buffered.length; i++) ranges.push([buffered.start(i), buffered.end(i)]);
+    this.ranges = ranges;
+    this.currentTime = currentTime;
+    this.duration = duration && isFinite(duration) ? duration : null;
+    this.scheduleDraw();
+  }
+
+  scheduleDraw() {
+    if (this._raf) return;
+    this._raf = requestAnimationFrame(() => { this._raf = null; this.draw(); });
+  }
+
+  draw() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.container.clientWidth;
+    const h = this.opts.height;
+    if (this.canvas.width !== Math.round(w * dpr) || this.canvas.height !== Math.round(h * dpr)) {
+      this.canvas.width = Math.round(w * dpr);
+      this.canvas.height = Math.round(h * dpr);
+      this.canvas.style.width = w + 'px';
+    }
+    const ctx = this.ctx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const win = this.opts.windowSec;
+    const winMax = this.duration || Math.max(this.currentTime + win / 2, win);
+    const xMin = this.duration ? 0 : Math.max(0, this.currentTime - win / 2);
+    const xMax = this.duration ? winMax : xMin + win;
+    const X = (t) => ((t - xMin) / (xMax - xMin)) * w;
+
+    // trilha (fundo) — recessivo
+    ctx.fillStyle = cssVar('--grid');
+    const trackY = h * 0.3, trackH = h * 0.4;
+    ctx.fillRect(0, trackY, w, trackH);
+
+    // intervalos bufferizados
+    ctx.fillStyle = cssVar('--series-2');
+    for (const [s, e] of this.ranges) {
+      const x1 = Math.max(0, X(s)), x2 = Math.min(w, X(e));
+      if (x2 > x1) ctx.fillRect(x1, trackY, x2 - x1, trackH);
+    }
+
+    // playhead
+    const px = X(this.currentTime);
+    ctx.strokeStyle = cssVar('--text-primary');
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px, trackY - 6);
+    ctx.lineTo(px, trackY + trackH + 6);
+    ctx.stroke();
+
+    ctx.font = '11px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillStyle = cssVar('--text-muted');
+    ctx.textBaseline = 'bottom';
+    ctx.textAlign = 'left';
+    ctx.fillText(fmtClockShort(xMin), 2, trackY - 8);
+    ctx.textAlign = 'right';
+    ctx.fillText(fmtClockShort(xMax), w - 2, trackY - 8);
+  }
+}
+
+function fmtClockShort(sec) {
+  const s = Math.max(0, Math.round(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 window.LineChart = LineChart;
+window.BufferTimeline = BufferTimeline;
 window.cssVar = cssVar;
