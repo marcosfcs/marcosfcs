@@ -373,8 +373,14 @@ function parseMediaPlaylist(lines, baseUrl) {
     'Descontinuidades': String(discontinuities),
     'Criptografia': model.drm.length ? model.drm.map((d) => d.system).join(', ') : 'Nenhuma',
     'Low-Latency HLS': lowLatencySummary(model.lowLatency, model.partsSeen),
+    'SCTE-35': scte35Summary(model.adBreaks),
   };
   return model;
+}
+
+function scte35Summary(adBreaks) {
+  const n = adBreaks ? adBreaks.length : 0;
+  return n ? `Presente (${n} marcador${n > 1 ? 'es' : ''})` : 'Não detectado';
 }
 
 function lowLatencySummary(ll, partsSeen) {
@@ -591,6 +597,7 @@ function parseMPD(xmlText, baseUrl) {
     'Low-Latency DASH': model.lowLatency
       ? `Sim — alvo ${model.lowLatency.target ?? '—'}s (min ${model.lowLatency.min ?? '—'}s / max ${model.lowLatency.max ?? '—'}s)`
       : 'Não detectado',
+    'SCTE-35': scte35Summary(model.adBreaks),
   };
   return model;
 }

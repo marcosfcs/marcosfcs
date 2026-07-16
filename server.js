@@ -41,6 +41,40 @@ const MANIFEST_MAX_BYTES = 20 * 1024 * 1024; // manifests são pequenos; limite 
 // estagnada). 0 = sem limite. Controlado pela UI via GET /throttle?kbps=N.
 let throttleKbps = 0;
 
+/**
+ * Histórico persistente de inspeções — SQLite via `node:sqlite` (módulo
+ * nativo do Node 22+, sem dependência externa nova). Guardado em data/
+ * (fora de public/, para não ser servido como arquivo estático) e ignorado
+ * pelo git. Se node:sqlite não estiver disponível nesta versão do Node, o
+ * histórico é desabilitado de forma explícita (mesmo padrão de honestidade
+ * usado para yt-dlp/WebCodecs ausentes).
+ */
+const DATA_DIR = path.join(__dirname, 'data');
+let historyDb = null;
+let historyError = null;
+try {
+  const { DatabaseSync } = require('node:sqlite');
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  historyDb = new DatabaseSync(path.join(DATA_DIR, 'history.sqlite'));
+  historyDb.exec(`
+    CREATE TABLE IF NOT EXISTS inspections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      url TEXT NOT NULL,
+      protocol TEXT,
+      live INTEGER,
+      video_variants INTEGER,
+      audio_tracks INTEGER,
+      hdr TEXT,
+      drm TEXT,
+      summary_json TEXT NOT NULL
+    )
+  `);
+} catch (e) {
+  historyError = e.message;
+  console.warn('Histórico persistente desabilitado (node:sqlite indisponível):', historyError);
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -397,6 +431,88 @@ function handleResolve(res, search) {
   );
 }
 
+const HISTORY_BODY_MAX_BYTES = 2 * 1024 * 1024; // resumo estático, não a telemetria inteira
+
+function readJsonBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) { reject(new Error('Corpo da requisição excede o limite.')); req.destroy(); return; }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+      catch { reject(new Error('JSON inválido.')); }
+    });
+    req.on('error', reject);
+  });
+}
+
+async function handleHistorySave(req, res) {
+  if (!historyDb) {
+    res.writeHead(501, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Histórico indisponível: ' + (historyError || 'node:sqlite não carregado') }));
+  }
+  let body;
+  try { body = await readJsonBody(req, HISTORY_BODY_MAX_BYTES); } catch (e) {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ error: e.message }));
+  }
+  if (!body || typeof body.url !== 'string' || !body.summary) {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Campos obrigatórios: url, summary.' }));
+  }
+  try {
+    const stmt = historyDb.prepare(`
+      INSERT INTO inspections (ts, url, protocol, live, video_variants, audio_tracks, hdr, drm, summary_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const info = stmt.run(
+      Date.now(),
+      body.url.slice(0, 2000),
+      body.protocol || null,
+      body.live ? 1 : 0,
+      Number.isFinite(body.videoVariants) ? body.videoVariants : null,
+      Number.isFinite(body.audioTracks) ? body.audioTracks : null,
+      body.hdr || null,
+      body.drm || null,
+      JSON.stringify(body.summary)
+    );
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ ok: true, id: Number(info.lastInsertRowid) }));
+  } catch (e) {
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Falha ao salvar no histórico: ' + e.message }));
+  }
+}
+
+function handleHistoryList(res, search) {
+  if (!historyDb) {
+    res.writeHead(501, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Histórico indisponível: ' + (historyError || 'node:sqlite não carregado') }));
+  }
+  const m = (search || '').match(/[?&]limit=(\d+)/);
+  const limit = Math.min(100, Math.max(1, m ? Number(m[1]) : 20));
+  try {
+    const rows = historyDb.prepare(`
+      SELECT id, ts, url, protocol, live, video_variants, audio_tracks, hdr, drm, summary_json
+      FROM inspections ORDER BY ts DESC LIMIT ?
+    `).all(limit);
+    const items = rows.map((r) => ({
+      id: r.id, ts: r.ts, url: r.url, protocol: r.protocol,
+      live: !!r.live, videoVariants: r.video_variants, audioTracks: r.audio_tracks,
+      hdr: r.hdr, drm: r.drm, summary: JSON.parse(r.summary_json),
+    }));
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ items }));
+  } catch (e) {
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Falha ao ler histórico: ' + e.message }));
+  }
+}
+
 function handleStatic(req, res, urlPath) {
   let rel = decodeURIComponent(urlPath);
   if (rel === '/') rel = '/index.html';
@@ -427,11 +543,12 @@ const server = http.createServer((req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'access-control-allow-origin': '*',
-      'access-control-allow-methods': 'GET, HEAD, OPTIONS',
+      'access-control-allow-methods': 'GET, HEAD, OPTIONS, POST',
       'access-control-allow-headers': '*',
     });
     return res.end();
   }
+  if (req.method === 'POST' && urlPath === '/api/history') return handleHistorySave(req, res);
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405);
     return res.end('Método não permitido');
@@ -440,6 +557,7 @@ const server = http.createServer((req, res) => {
   if (urlPath.startsWith('/p/')) return handleProxy(req, res, urlPath, search);
   if (urlPath === '/throttle') return handleThrottle(res, search);
   if (urlPath === '/resolve') return handleResolve(res, search);
+  if (urlPath === '/api/history') return handleHistoryList(res, search);
   return handleStatic(req, res, urlPath);
 });
 

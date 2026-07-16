@@ -224,13 +224,15 @@ const VIDEO_COLUMNS = [
   { label: 'Bitrate (pico)', get: (v) => P.fmtBits(v.bandwidth), num: true },
   { label: 'Bitrate (médio)', get: (v) => P.fmtBits(v.avgBandwidth), num: true },
   { label: 'FPS', get: (v) => (v.frameRate ? String(Math.round(v.frameRate * 100) / 100) : '—'), num: true },
-  { label: 'Codec', get: (v) => v.codecs.filter((c) => isVideo(c)).map(P.codecName).join(', ') || v.codecs.map(P.codecName).join(', ') },
+  { label: 'Codec de vídeo', get: (v) => v.codecs.filter((c) => isVideo(c)).map(P.codecName).join(', ') || v.codecs.map(P.codecName).join(', ') },
+  { label: 'Codec de áudio', get: (v) => v.codecs.filter((c) => isAudio(c)).map(P.codecName).join(', ') || '—' },
   { label: 'String de codec', get: (v) => v.codecs.join(', '), mono: true },
-  { label: 'Faixa de vídeo', get: (v) => rangeCell(v) },
+  { label: 'Curva de Cor', get: (v) => rangeCell(v) },
   { label: 'Extras', get: (v) => videoExtras(v) },
 ];
 
 function isVideo(c) { return /^(avc|hvc|hev|dvh|dav1|av01|vp0?9)/i.test(c); }
+function isAudio(c) { return /^(mp4a|ac-3|ec-3|ac-4|opus|flac|mp3)/i.test(c); }
 
 function rangeCell(v) {
   const span = el('span', v.hdr ? 'range-hdr' : 'range-sdr', v.videoRange);
@@ -327,9 +329,22 @@ function renderSegments(seg, sourceNote) {
   });
   state.charts.segments.setSeriesData('dur', points);
 
-  renderTable($('#seg-table'), SEG_COLUMNS, seg.list.slice(0, 60), '');
+  const recent = seg.list.slice(-3);
+  const older = seg.list.slice(-63, -3);
+  renderTable($('#seg-table'), SEG_COLUMNS, recent, '');
+
+  const olderWrap = $('#seg-table-older-wrap');
+  if (older.length) {
+    olderWrap.hidden = false;
+    $('#seg-table-older-summary').textContent = `Ver os demais ${older.length} segmentos`;
+    renderTable($('#seg-table-older'), SEG_COLUMNS, older, '');
+  } else {
+    olderWrap.hidden = true;
+    $('#seg-table-older').innerHTML = '';
+  }
+
   $('#seg-table-note').textContent =
-    seg.list.length > 60 ? `Exibindo os primeiros 60 de ${seg.list.length} segmentos.` : '';
+    seg.list.length > 63 ? `Exibindo os últimos 63 de ${seg.list.length} segmentos (3 em execução + demais no dropdown).` : '';
 }
 
 /* ================================================================ *
@@ -480,6 +495,10 @@ function fmtClock(sec) {
 }
 
 function setupTelemetryCharts(isLive) {
+  // única origem do eixo X (wall-clock) para todos os gráficos temporais desta
+  // sessão de inspeção — reseta aqui (inspeção nova), não em startTelemetry(),
+  // para que uma troca de motor no meio da sessão preserve a continuidade.
+  state.t0 = performance.now();
   destroyChart('buffer'); destroyChart('bitrate'); destroyChart('lumaT');
   destroyChart('rgb'); destroyChart('luma');
   destroyChart('audioLevel'); destroyChart('spectrum'); destroyChart('lufs');
@@ -685,7 +704,13 @@ function setupAlertEngine(model, isLive) {
 function startTelemetry(model, isLive) {
   const video = $('#video');
   state.analyzer = new ColorAnalyzer(video);
-  state.t0 = performance.now();
+  // state.t0 é definido em setupTelemetryCharts() (só numa inspeção nova) e
+  // propositalmente NÃO é resetado aqui — startTelemetry() também roda numa
+  // troca de motor (hls.js ↔ Shaka) em cima da mesma sessão de inspeção, e
+  // resetar o t0 nesse caso faria os gráficos temporais "voltarem ao zero"
+  // sem limpar os dados antigos (setupTelemetryCharts não é chamado na troca
+  // de motor), sobrepondo pontos novos em cima dos antigos.
+  if (state.t0 == null) state.t0 = performance.now();
   state.lastDropped = 0;
   state.lastCurrentTime = video.currentTime;
   let colorTick = 0;
@@ -823,21 +848,6 @@ function startTelemetry(model, isLive) {
       }
     }
 
-    // espaço de cor real (WebCodecs) — amostragem esparsa (~2s), assíncrona
-    if (state.colorSpaceProbe && state.colorSpaceProbe.ok && Math.round(t * 2) % 4 === 0) {
-      state.colorSpaceProbe.sample().then((cs) => {
-        if (!cs) return;
-        renderKV($('#colorspace-overview'), {
-          'Primárias (decodificado)': cs.primaries,
-          'Transferência (decodificado)': cs.transfer,
-          'Matriz (decodificado)': cs.matrix,
-          'Faixa completa (full range)': cs.fullRange == null ? '—' : (cs.fullRange ? 'Sim' : 'Não (limited/studio)'),
-          'HDR real (decoder)': cs.hdr ? 'Sim' : 'Não — SDR',
-          'Resolução codificada': `${cs.codedWidth}x${cs.codedHeight}`,
-        });
-      }).catch(() => { /* frame indisponível nesse instante */ });
-    }
-
     // QoE
     if (state.qoe) {
       state.qoe.tick();
@@ -890,8 +900,36 @@ function startTelemetry(model, isLive) {
         state.charts.rgb.setSeriesData('b', toPoints(s.histB));
         state.charts.luma.setSeriesData('y', toPoints(s.histY));
         state.charts.lumaT.push(t, { apl: s.avgLuma, clipH: s.clipHighPct, clipL: s.clipLowPct });
-        state.charts.chroma.setPoints(s.chromaPoints);
         $('#tile-apl').textContent = s.avgLuma.toFixed(1).replace('.', ',') + '%';
+
+        // cromaticidade: usa WebCodecs (gamut real, sem canvas) quando disponível;
+        // senão cai no canvas 2D (aproximação sempre em Rec.709/SDR, documentada na UI)
+        if (state.colorSpaceProbe && state.colorSpaceProbe.ok) {
+          state.colorSpaceProbe.sample({ withPixels: true }).then((cs) => {
+            if (!cs) return;
+            renderKV($('#colorspace-overview'), {
+              'Primárias (decodificado)': cs.primaries,
+              'Transferência (decodificado)': cs.transfer,
+              'Matriz (decodificado)': cs.matrix,
+              'Faixa completa (full range)': cs.fullRange == null ? '—' : (cs.fullRange ? 'Sim' : 'Não (limited/studio)'),
+              'HDR real (decoder)': cs.hdr ? 'Sim' : 'Não — SDR',
+              'Resolução codificada': `${cs.codedWidth}x${cs.codedHeight}`,
+            });
+            if (cs.pixelsSupported && cs.chromaPoints && cs.chromaPoints.length) {
+              state.charts.chroma.setPoints(cs.chromaPoints);
+              $('#chroma-method-note').textContent =
+                'Amostragem via WebCodecs (VideoFrame bruto) — gamut real do conteúdo decodificado, sem tone-mapping de canvas.';
+            } else {
+              state.charts.chroma.setPoints(s.chromaPoints);
+              $('#chroma-method-note').textContent =
+                'Amostragem via canvas 2D (aproximação) — formato de frame não suportado para leitura direta; limitada a Rec.709/SDR.';
+            }
+          }).catch(() => { /* frame indisponível nesse instante — mantém os pontos anteriores */ });
+        } else {
+          state.charts.chroma.setPoints(s.chromaPoints);
+          $('#chroma-method-note').textContent =
+            'Amostragem via canvas 2D (aproximação) — WebCodecs indisponível neste navegador; limitada a Rec.709/SDR.';
+        }
 
         // assinatura do frame para detecção de congelamento
         state.lastColor = s;
@@ -1018,6 +1056,7 @@ function startPlayback(type, url, model, isLive) {
   const video = $('#video');
   state.drmBlocked = false;
   $('#color-note-runtime').textContent = '';
+  $('#chroma-method-note').textContent = '';
   state.lastPlay = { type, url, model, isLive };
 
   // Progressivo (YouTube VOD): arquivo único tocado direto pelo <video>,
@@ -1450,7 +1489,7 @@ async function inspect(url) {
 
     $('#results').hidden = false;
     renderBadges(model);
-    renderKV($('#overview'), { ...model.overview, 'URL': url, 'Obtido via': proxied ? 'proxy local (/p/)' : 'fetch direto' });
+    renderKV($('#overview'), { ...model.overview, 'SCTE-35': model.overview['SCTE-35'] || 'Verificando…', 'URL': url, 'Obtido via': proxied ? 'proxy local (/p/)' : 'fetch direto' });
     $('#raw-manifest').textContent = text.length > 200000 ? text.slice(0, 200000) + '\n… (truncado)' : text;
 
     renderTable($('#video-table'), VIDEO_COLUMNS, model.video || [], 'Nenhuma variante de vídeo declarada neste manifest.');
@@ -1476,6 +1515,9 @@ async function inspect(url) {
           if (mediaModel.kind === 'media') {
             isLive = mediaModel.live;
             model.overview['Transmissão'] = mediaModel.live ? 'AO VIVO (sem EXT-X-ENDLIST)' : 'VOD (finalizada)';
+            model.overview['Duração total'] = P.fmtDur(mediaModel.totalDuration);
+            model.overview['Low-Latency HLS'] = mediaModel.overview['Low-Latency HLS'];
+            model.overview['SCTE-35'] = mediaModel.overview['SCTE-35'];
             renderBadges(model);
             renderSegments(
               { ...mediaModel, count: mediaModel.segments.length, list: mediaModel.segments, targetDuration: mediaModel.targetDuration, totalDuration: mediaModel.totalDuration },
@@ -1483,9 +1525,6 @@ async function inspect(url) {
             );
             renderKV($('#overview'), {
               ...model.overview,
-              'Transmissão': mediaModel.live ? 'AO VIVO (sem EXT-X-ENDLIST)' : 'VOD (finalizada)',
-              'Duração total': P.fmtDur(mediaModel.totalDuration),
-              'Low-Latency HLS': mediaModel.overview['Low-Latency HLS'],
               'URL': url,
               'Obtido via': proxied ? 'proxy local (/p/)' : 'fetch direto',
             });
@@ -1521,6 +1560,8 @@ async function inspect(url) {
     state.targetDuration = (resolvedMediaModel && resolvedMediaModel.targetDuration) ||
       (model.segments && model.segments.targetDuration) || 6;
 
+    saveHistoryEntry(url, model, adBreaks);
+
     // Playback + telemetria
     setupTelemetryCharts(isLive);
     const forceProxy = $('#force-proxy').checked;
@@ -1539,10 +1580,106 @@ async function inspect(url) {
 }
 
 /* ================================================================ *
+ * Histórico persistente de testes (SQLite via server.js /api/history)
+ * ================================================================ */
+
+/** Envia um resumo estático da inspeção — best-effort, não bloqueia a UI. */
+function saveHistoryEntry(url, model, adBreaks) {
+  const hdrVariants = (model.video || []).filter((v) => v.hdr);
+  const summary = {
+    protocol: model.protocol,
+    overview: { ...model.overview, 'URL': url },
+    video: model.video || [],
+    audio: model.audio || [],
+    subtitles: model.subtitles || [],
+    closedCaptions: model.closedCaptions || [],
+    drm: model.drm || [],
+    adBreaks: adBreaks || [],
+  };
+  const body = {
+    url,
+    protocol: model.protocol,
+    live: /AO VIVO/.test(model.overview['Transmissão'] || ''),
+    videoVariants: (model.video || []).length,
+    audioTracks: (model.audio || []).length,
+    hdr: hdrVariants.length ? [...new Set(hdrVariants.map((v) => v.videoRange))].join(' / ') : 'SDR',
+    drm: (model.drm || []).map((d) => d.system).join(', ') || 'Nenhuma',
+    summary,
+  };
+  fetch('/api/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    .then((r) => r.json())
+    .then((r) => { if (r && r.ok) loadHistory(); })
+    .catch(() => { /* histórico é best-effort — não interrompe a inspeção */ });
+}
+
+async function loadHistory() {
+  try {
+    const res = await fetch('/api/history?limit=10');
+    if (!res.ok) { $('#sec-history').hidden = true; return; }
+    const { items } = await res.json();
+    renderHistoryList(items || []);
+  } catch {
+    $('#sec-history').hidden = true;
+  }
+}
+
+function renderHistoryList(items) {
+  const section = $('#sec-history');
+  const list = $('#history-list');
+  list.innerHTML = '';
+  if (!items.length) { section.hidden = true; return; }
+  section.hidden = false;
+  $('#history-note').textContent = `${items.length} teste${items.length > 1 ? 's' : ''} recente${items.length > 1 ? 's' : ''} — clique para reabrir (somente leitura, sem player).`;
+  for (const item of items) {
+    const li = el('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'history-item';
+    const time = el('span', 'hi-time', new Date(item.ts).toLocaleString('pt-BR'));
+    const urlEl = el('span', 'hi-url', item.url);
+    const tags = el('span', 'hi-tags');
+    tags.appendChild(badge(item.protocol || '—', 'info'));
+    tags.appendChild(badge(item.live ? 'AO VIVO' : 'VOD', item.live ? 'live' : 'ok'));
+    if (item.hdr && item.hdr !== 'SDR') tags.appendChild(badge('HDR: ' + item.hdr, 'hdr'));
+    if (item.drm && item.drm !== 'Nenhuma') tags.appendChild(badge('DRM', 'drm'));
+    btn.append(time, urlEl, tags);
+    btn.addEventListener('click', () => restoreHistoryEntry(item));
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
+}
+
+/** Restaura só as seções estáticas de um teste antigo — sem player/telemetria
+ * (o stream pode nem existir mais, especialmente ao vivo). */
+function restoreHistoryEntry(item) {
+  stopPlayback();
+  state.lastPlay = null;
+  for (const k of Object.keys(state.charts)) destroyChart(k);
+  const model = item.summary;
+  $('#results').hidden = false;
+  setStatus('Sessão histórica de ' + new Date(item.ts).toLocaleString('pt-BR') + ' — somente leitura, sem player.', 'busy');
+  renderBadges(model);
+  renderKV($('#overview'), model.overview);
+  $('#raw-manifest').textContent = '(manifest bruto não é armazenado no histórico — apenas o resumo estático)';
+  renderTable($('#video-table'), VIDEO_COLUMNS, model.video || [], 'Nenhuma variante de vídeo declarada neste manifest.');
+  renderTable($('#audio-table'), AUDIO_COLUMNS, model.audio || [], 'Nenhuma faixa de áudio alternativa declarada (áudio pode estar muxado no vídeo).');
+  renderTable($('#subs-table'), SUB_COLUMNS, [...(model.subtitles || []), ...(model.closedCaptions || [])], 'Nenhuma faixa de legendas/closed captions declarada.');
+  renderTable($('#drm-table'), DRM_COLUMNS, (model.drm || []).length ? model.drm : [], 'Nenhum sistema de DRM/criptografia declarado no manifest.');
+  renderHdrPanel(model);
+  renderAdBreaks(model.adBreaks || []);
+  $('#sec-segments').hidden = true;
+  $('#sec-container').hidden = true;
+  $('#event-log').innerHTML = '';
+  logEvent('Sessão histórica reaberta (somente leitura): ' + model.overview['URL']);
+}
+
+/* ================================================================ *
  * Bootstrap
  * ================================================================ */
 
 document.addEventListener('DOMContentLoaded', () => {
+  loadHistory();
+
   $('#form').addEventListener('submit', (e) => {
     e.preventDefault();
     const url = $('#url').value.trim();

@@ -109,6 +109,12 @@
     </div>
   </header>
 
+  <section id="sec-history" class="wrap history-section" hidden>
+    <h2>Histórico de testes <span class="hint">(persistente — armazenado no servidor via SQLite)</span></h2>
+    <p id="history-note" class="note"></p>
+    <ul id="history-list" class="history-list"></ul>
+  </section>
+
   <main class="wrap" id="results" hidden>
 
     <section>
@@ -149,8 +155,12 @@
           <div id="seg-chart"></div>
         </div>
       </div>
-      <h3>Segmentos</h3>
+      <h3>Segmentos <span class="hint">(últimos 3 — em execução)</span></h3>
       <div id="seg-table"></div>
+      <details id="seg-table-older-wrap" class="raw-details" hidden>
+        <summary id="seg-table-older-summary">Ver os demais segmentos</summary>
+        <div id="seg-table-older"></div>
+      </details>
       <p id="seg-table-note" class="empty-note"></p>
     </section>
 
@@ -356,6 +366,7 @@
         coordenadas de cromaticidade — mostra se o conteúdo está de fato usando um gamut mais amplo que o
         Rec.709/sRGB, ou se na prática fica todo contido nele. Não acumula histórico: a cada nova amostragem
         os pontos são substituídos pelos do frame atual.</p>
+      <p id="chroma-method-note" class="note"></p>
       <div id="chart-chroma"></div>
     </section>
 

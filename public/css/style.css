@@ -204,7 +204,7 @@ h2 {
   letter-spacing: -0.02em;
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
 }
-h2::before {
+main h2::before {
   counter-increment: section-counter;
   content: counter(section-counter, decimal-leading-zero);
   font-family: var(--font-mono);
@@ -215,6 +215,22 @@ h2::before {
   order: -1;
 }
 main { counter-reset: section-counter; }
+
+/* ---------- histórico de testes ---------- */
+
+.history-section { margin: 24px auto; }
+.history-section h2 { font-size: 15px; margin-bottom: 10px; }
+.history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.history-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; border: 1px solid var(--grid); border-radius: var(--radius-panel);
+  background: var(--surface-1); cursor: pointer; font-size: 13px; text-align: left; width: 100%;
+  color: var(--text-secondary);
+}
+.history-item:hover { border-color: var(--accent); color: var(--text-primary); }
+.history-item .hi-time { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); flex: none; width: 130px; }
+.history-item .hi-url { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; }
+.history-item .hi-tags { display: inline-flex; gap: 6px; flex: none; }
 h3 {
   margin: 20px 0 10px; font-size: 10px; color: var(--text-muted); font-weight: 500;
   font-family: var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase;
