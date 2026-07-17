@@ -53,6 +53,8 @@ const state = {
   qualityCompare: null,
   qualityTimer: null,
   qualityPlayer: null,
+  qualityStartTimeout: null,
+  _qualityCleanupListeners: null,
 };
 
 if (window.shaka && shaka.polyfill && shaka.polyfill.installAll) shaka.polyfill.installAll();
@@ -1237,19 +1239,36 @@ function renderAdBreaks(adBreaks) {
  * Análise de qualidade — PSNR/SSIM com referência
  * ================================================================ */
 
+/**
+ * Variantes utilizáveis pela comparação de qualidade. `model.video` cobre o
+ * caso normal (master HLS / MPD DASH com múltiplas representações); playlists
+ * de mídia HLS inspecionadas diretamente (`kind: 'media'`) não têm variantes
+ * — a própria URL inspecionada já É a única variante, por isso o fallback
+ * para `model.qualityVariants` (preenchido em inspect()) nesse caso.
+ */
+function qualityVariantsOf(model) {
+  return (model.video && model.video.length) ? model.video : (model.qualityVariants || []);
+}
+
 function populateQualityVariantSelect(model) {
   const sel = $('#quality-variant');
   sel.innerHTML = '';
-  for (const [i, v] of (model.video || []).entries()) {
+  for (const [i, v] of qualityVariantsOf(model).entries()) {
     const opt = document.createElement('option');
     opt.value = String(i);
     const codec = (v.codecs || []).filter((c) => isVideo(c)).map(P.codecName).join(',') || (v.codecs || []).map(P.codecName).join(',');
-    opt.textContent = `${v.resolution} · ${P.fmtBits(v.bandwidth)} · ${codec}`;
+    opt.textContent = codec ? `${v.resolution} · ${P.fmtBits(v.bandwidth)} · ${codec}` : `${v.resolution} · ${P.fmtBits(v.bandwidth)}`;
     sel.appendChild(opt);
   }
 }
 
-/** Toca a variante ESPECÍFICA travada (sem ABR) no <video> oculto de comparação. */
+/**
+ * Toca a variante ESPECÍFICA travada (sem ABR) no <video> oculto de comparação.
+ * Rejeita a Promise em erro FATAL do player — antes o mesmo evento ERROR
+ * genérico resolvia como se fosse sucesso, e o restante do fluxo seguia
+ * tentando comparar um <video> que nunca de fato anexou mídia (readyState
+ * nunca avançava, e sample() silenciosamente retornava null para sempre).
+ */
 async function attachLockedVariant(video, model, variant) {
   video.muted = true;
   if (model.protocol === 'HLS') {
@@ -1258,16 +1277,24 @@ async function attachLockedVariant(video, model, variant) {
     const url = state.lastPlay && state.lastPlay.url.startsWith('/p/') ? proxify(variant.uri) : variant.uri;
     hls.loadSource(url);
     hls.attachMedia(video);
-    await new Promise((resolve) => { hls.once(Hls.Events.MANIFEST_PARSED, resolve); hls.once(Hls.Events.ERROR, resolve); });
+    await new Promise((resolve, reject) => {
+      hls.once(Hls.Events.MANIFEST_PARSED, resolve);
+      hls.once(Hls.Events.ERROR, (_evt, data) => {
+        if (data && data.fatal) reject(new Error('hls.js: ' + (data.details || data.type || 'erro fatal')));
+      });
+    });
   } else if (model.protocol === 'DASH') {
     const player = dashjs.MediaPlayer().create();
     state.qualityPlayer = player;
     try { player.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: false } } } }); } catch { /* ignore */ }
     player.initialize(video, state.lastPlay ? state.lastPlay.url : state.sessionUrl, true);
     // dash.js não tem .once() — remove os dois listeners manualmente ao disparar o primeiro
-    await new Promise((resolve) => {
+    await new Promise((resolve, reject) => {
       const onInit = () => { cleanup(); resolve(); };
-      const onError = () => { cleanup(); resolve(); };
+      const onError = (e) => {
+        cleanup();
+        reject(new Error('dash.js: ' + ((e && (e.error && e.error.message || e.error)) || 'erro ao inicializar')));
+      };
       const cleanup = () => {
         player.off(dashjs.MediaPlayer.events.STREAM_INITIALIZED, onInit);
         player.off(dashjs.MediaPlayer.events.ERROR, onError);
@@ -1290,12 +1317,13 @@ async function attachLockedVariant(video, model, variant) {
 
 async function startQualityCompare() {
   const model = state.lastPlay ? state.lastPlay.model : null;
-  if (!model || !(model.video || []).length) {
+  const variants = model ? qualityVariantsOf(model) : [];
+  if (!model || !variants.length) {
     $('#quality-status').textContent = 'Nenhuma variante de vídeo disponível para comparar.';
     return;
   }
   const idx = Number($('#quality-variant').value || 0);
-  const variant = model.video[idx];
+  const variant = variants[idx];
   // HLS precisa da playlist própria da variante; DASH trava por bandwidth
   // dentro do MPD completo (não tem uma URL individual por representação)
   if (!variant || (model.protocol === 'HLS' && !variant.uri)) {
@@ -1320,6 +1348,31 @@ async function startQualityCompare() {
 
   const refVideo = $('#video-reference');
   const distVideo = $('#video-distorted');
+
+  // Antes, uma falha ao carregar (rede/CORS/URL inválida) não tinha NENHUM
+  // sinal — o vídeo nunca avançava de readyState, sample() retornava null
+  // pra sempre, e a UI ficava travada em "Comparando…" indefinidamente sem
+  // erro nenhum. Agora: evento 'error' nativo do <video> encerra com uma
+  // mensagem clara, e um timeout cobre o caso de nem erro nem sucesso (ex.:
+  // requisição que trava sem nunca resolver).
+  let settled = false;
+  const fail = (msg) => {
+    if (settled) return;
+    settled = true;
+    logEvent('Comparação de qualidade: ' + msg);
+    stopQualityCompare();
+    $('#quality-status').textContent = msg;
+    $('#quality-status').classList.add('hint-error');
+  };
+  const onRefError = () => fail('Falha ao carregar o vídeo de referência (verifique a URL/conectividade).');
+  const onDistError = () => fail('Falha ao carregar a variante travada (verifique a URL/conectividade).');
+  refVideo.addEventListener('error', onRefError, { once: true });
+  distVideo.addEventListener('error', onDistError, { once: true });
+  state._qualityCleanupListeners = () => {
+    refVideo.removeEventListener('error', onRefError);
+    distVideo.removeEventListener('error', onDistError);
+  };
+
   refVideo.src = refUrl;
   refVideo.muted = true;
   refVideo.play().catch(() => { /* segue mesmo assim; sample() aguarda readyState */ });
@@ -1327,9 +1380,10 @@ async function startQualityCompare() {
   try {
     await attachLockedVariant(distVideo, model, variant);
   } catch (e) {
-    $('#quality-status').textContent = 'Erro ao carregar a variante: ' + e.message;
+    fail('Erro ao carregar a variante: ' + e.message);
     return;
   }
+  if (settled) return; // já falhou via evento 'error' enquanto attachLockedVariant rodava
 
   destroyChart('qualityPsnr'); destroyChart('qualitySsim');
   state.charts.qualityPsnr = new LineChart($('#chart-quality-psnr'), {
@@ -1347,14 +1401,21 @@ async function startQualityCompare() {
   state.qualityT0 = performance.now();
   $('#quality-status').textContent = 'Comparando…';
 
+  // se nem sucesso nem erro acontecerem (ex.: request que trava sem nunca
+  // resolver, sem disparar 'error'), evita ficar preso em "Comparando…" pra
+  // sempre — cancelado assim que a 1ª amostra real chegar, abaixo.
+  state.qualityStartTimeout = setTimeout(() => {
+    fail('Tempo esgotado aguardando referência/variante ficarem prontas para reprodução (timeout).');
+  }, 10000);
+
   state.qualityTimer = setInterval(() => {
     const t = (performance.now() - state.qualityT0) / 1000;
     state.qualityCompare.maybeResync();
     const s = state.qualityCompare.sample();
     if (!s) return;
+    if (state.qualityStartTimeout) { clearTimeout(state.qualityStartTimeout); state.qualityStartTimeout = null; }
     if (s.blocked) {
-      $('#quality-status').textContent = 'Bloqueado: leitura de pixels não permitida (CORS sem cabeçalhos, ou DRM).';
-      stopQualityCompare();
+      fail('Bloqueado: leitura de pixels não permitida (CORS sem cabeçalhos, ou DRM).');
       return;
     }
     state.charts.qualityPsnr && state.charts.qualityPsnr.push(t, { psnr: s.psnr });
@@ -1366,6 +1427,8 @@ async function startQualityCompare() {
 
 function stopQualityCompare() {
   if (state.qualityTimer) { clearInterval(state.qualityTimer); state.qualityTimer = null; }
+  if (state.qualityStartTimeout) { clearTimeout(state.qualityStartTimeout); state.qualityStartTimeout = null; }
+  if (state._qualityCleanupListeners) { state._qualityCleanupListeners(); state._qualityCleanupListeners = null; }
   if (state.qualityPlayer) {
     try {
       if (state.qualityPlayer.destroy) state.qualityPlayer.destroy();
@@ -1380,7 +1443,7 @@ function stopQualityCompare() {
   }
   if (distVideo) { distVideo.removeAttribute('src'); distVideo.load(); }
   state.qualityCompare = null;
-  if ($('#quality-status')) $('#quality-status').textContent = '';
+  if ($('#quality-status')) { $('#quality-status').textContent = ''; $('#quality-status').classList.remove('hint-error'); }
 }
 
 function setStatus(msg, kind) {
@@ -1486,6 +1549,12 @@ async function inspect(url) {
     logEvent(`Manifest carregado ${proxied ? 'via proxy local' : 'diretamente'} (${text.length.toLocaleString('pt-BR')} bytes).`);
 
     const model = type === 'hls' ? P.parseM3U8(text, effectiveUrl) : P.parseMPD(text, effectiveUrl);
+    // playlist de mídia HLS inspecionada diretamente não tem lista de variantes
+    // (model.video) — a própria URL já É a única variante, só para o comparador
+    // de qualidade (a tabela "Vídeo — variantes" continua vazia, corretamente)
+    if (model.protocol === 'HLS' && model.kind === 'media') {
+      model.qualityVariants = [{ id: '1', uri: url, resolution: 'Playlist única', bandwidth: null }];
+    }
 
     $('#results').hidden = false;
     renderBadges(model);

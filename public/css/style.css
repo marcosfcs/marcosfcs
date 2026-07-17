@@ -351,6 +351,7 @@ h3 {
   font-weight: 400; color: var(--text-faint); font-size: 11px;
   font-family: var(--font-mono); text-transform: none; letter-spacing: 0;
 }
+.hint.hint-error { color: var(--status-critical); font-weight: 600; }
 
 /* ---------- VU meter ---------- */
 

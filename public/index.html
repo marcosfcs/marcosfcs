@@ -83,8 +83,8 @@
     <div class="wrap">
       <span class="eyebrow">Plataforma de Distribuição · Playback &amp; Experience</span>
       <h1>Stream Inspector</h1>
-      <p class="subtitle">Inspeção completa de transmissões HLS (<code>.m3u8</code>) e MPEG-DASH (<code>.mpd</code>) —
-        metadados, vídeo, áudio, legendas, DRM, telemetria em tempo real e curvas de cor para análise SDR/HDR.</p>
+      <p class="subtitle">Inspeção de transmissões em streaming HLS e DASH com metadados de vídeo, áudio,
+        legendas, DRM, bem como uma seção de telemetria em tempo real.</p>
 
       <form id="form" class="url-form" autocomplete="off">
         <input id="url" type="url" required
@@ -100,6 +100,7 @@
         <button type="button" data-example="https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd">DASH VOD (Akamai)</button>
         <button type="button" data-example="/samples/master.m3u8">Amostra local HLS</button>
         <button type="button" data-example="/samples/manifest.mpd">Amostra local DASH</button>
+        <button type="button" data-example="https://www.youtube.com/watch?v=XV6Ld4TJYYM">VOD Youtube</button>
       </div>
       <p class="examples-note">Para URLs do YouTube (<code>youtube.com/watch</code>, <code>youtu.be</code>, lives): requer
         <code>yt-dlp</code> instalado na máquina que roda o <code>server.js</code> (<code>pip install yt-dlp</code>).
@@ -110,7 +111,7 @@
   </header>
 
   <section id="sec-history" class="wrap history-section" hidden>
-    <h2>Histórico de testes <span class="hint">(persistente — armazenado no servidor via SQLite)</span></h2>
+    <h2>Histórico de testes</h2>
     <p id="history-note" class="note"></p>
     <ul id="history-list" class="history-list"></ul>
   </section>
