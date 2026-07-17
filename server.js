@@ -361,21 +361,22 @@ function handleThrottle(res, search) {
 }
 
 /**
- * Resolve uma URL do YouTube em manifest/mídia via yt-dlp LOCAL.
- * O sistema não decodifica assinaturas do YouTube — delega ao yt-dlp,
- * que o usuário instala (pip install yt-dlp). Restrito a hosts do
- * YouTube para não virar um resolvedor/downloader genérico.
+ * Resolve uma URL do YouTube/Globoplay em manifest/mídia via yt-dlp LOCAL.
+ * O sistema não decodifica assinaturas/DRM — delega inteiramente ao yt-dlp,
+ * que o usuário instala (pip install yt-dlp). Restrito a uma allowlist de
+ * hosts conhecidos para não virar um resolvedor/downloader genérico.
  */
 const YT_HOSTS = /^(?:www\.|m\.)?(?:youtube\.com|youtube-nocookie\.com|youtu\.be)$/i;
+const GLOBOPLAY_HOSTS = /^(?:www\.)?globoplay\.globo\.com$/i;
 
 function handleResolve(res, search) {
   const m = (search || '').match(/[?&]url=([^&]+)/);
   const url = m ? decodeURIComponent(m[1]) : '';
   let host;
   try { host = new URL(url).hostname; } catch { host = null; }
-  if (!host || !YT_HOSTS.test(host)) {
+  if (!host || !(YT_HOSTS.test(host) || GLOBOPLAY_HOSTS.test(host))) {
     res.writeHead(400, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-    return res.end(JSON.stringify({ error: 'URL do YouTube inválida ou host não suportado.' }));
+    return res.end(JSON.stringify({ error: 'URL inválida ou host não suportado (apenas YouTube/Globoplay).' }));
   }
 
   execFile(

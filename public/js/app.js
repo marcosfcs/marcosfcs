@@ -1524,6 +1524,48 @@ async function inspectYouTube(url) {
   return true;
 }
 
+/**
+ * Resolve uma URL do Globoplay via yt-dlp local (mesmo endpoint /resolve
+ * usado para YouTube) e delega ao pipeline de manifest normal — diferente
+ * do YouTube, aqui não há um modelo "progressivo" próprio: conteúdo de
+ * emissora normalmente expõe um manifest HLS/DASH de verdade (ao vivo ou
+ * VOD), então o caminho é sempre achar esse manifest e chamar inspect() com
+ * ele (paridade total: variantes, segmentação, container e telemetria
+ * reais). Se exigir login/assinatura ou tiver DRM que o yt-dlp não consiga
+ * contornar, a resolução falha aqui mesmo — sem tentativa de bypass.
+ */
+async function inspectGloboplay(url) {
+  logEvent('URL do Globoplay detectada — resolvendo via yt-dlp local (uso sujeito aos Termos do Globoplay).');
+  setStatus('Resolvendo com yt-dlp…', 'busy');
+
+  let info;
+  try {
+    const r = await fetch('/resolve?url=' + encodeURIComponent(url));
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const hint = body.code === 'NO_YTDLP'
+        ? ' Instale o yt-dlp e sirva a página por "node server.js".'
+        : '';
+      setStatus('Não foi possível resolver a URL do Globoplay: ' + (body.error || `HTTP ${r.status}`) + hint, 'error');
+      return true;
+    }
+    info = body;
+  } catch (e) {
+    setStatus('Falha ao chamar o resolvedor local (/resolve requer o server.js): ' + e.message, 'error');
+    return true;
+  }
+
+  const manifestUrl = StreamGloboplay.pickManifestUrl(info);
+  if (!manifestUrl) {
+    setStatus('O yt-dlp não retornou uma URL de manifest para este conteúdo do Globoplay (pode exigir login/assinatura, ou ser protegido por DRM incompatível).', 'error');
+    return true;
+  }
+
+  logEvent(`Globoplay: "${info.title || info.id || url}" — manifest localizado, usando o pipeline de inspeção completo.`);
+  await inspect(manifestUrl);
+  return true;
+}
+
 async function inspect(url) {
   const btn = $('#btn-run');
   btn.disabled = true;
@@ -1541,6 +1583,11 @@ async function inspect(url) {
     // YouTube: resolve via yt-dlp local antes de tudo
     if (window.StreamYouTube && StreamYouTube.isYouTubeUrl(url)) {
       const handled = await inspectYouTube(url);
+      if (handled) return;
+    }
+    // Globoplay: mesma ideia, mas sempre delega ao pipeline de manifest normal
+    if (window.StreamGloboplay && StreamGloboplay.isGloboplayUrl(url)) {
+      const handled = await inspectGloboplay(url);
       if (handled) return;
     }
 
