@@ -52,7 +52,11 @@ async function main() {
   await context.storageState({ path: SESSION_PATH });
   await browser.close();
 
-  console.log(`Sessão salva em ${SESSION_PATH}.`);
+  // O arquivo guarda cookies de autenticação em texto puro — restringe a
+  // leitura ao dono para outros usuários locais não conseguirem lê-lo.
+  try { fs.chmodSync(SESSION_PATH, 0o600); } catch { /* SO sem suporte a chmod (ex.: Windows) */ }
+
+  console.log(`Sessão salva em ${SESSION_PATH} (modo 600 — contém credenciais, não compartilhe).`);
   console.log('Pronto — o app já pode resolver URLs do Globoplay automaticamente até essa sessão expirar.');
 }
 

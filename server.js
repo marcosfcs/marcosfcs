@@ -28,10 +28,18 @@ const net = require('net');
 const tls = require('tls');
 const fs = require('fs');
 const path = require('path');
+const dns = require('dns');
 const { execFile } = require('child_process');
 
 const PORT = Number(process.env.PORT) || 8787;
-const HOST = process.env.HOST || '0.0.0.0';
+// Escuta só em loopback por padrão: o proxy /p/ e os endpoints de resolução
+// são poderosos (ver isBlockedTarget e os guards same-origin abaixo) e não
+// devem ficar expostos à rede sem intenção explícita. Override consciente:
+// HOST=0.0.0.0 node server.js (só em rede confiável).
+const HOST = process.env.HOST || '127.0.0.1';
+// Permite proxiar alvos internos/privados de propósito (streams de LAN).
+// Desligado por padrão para não virar um SSRF drive-by.
+const ALLOW_PRIVATE_PROXY = process.env.ALLOW_PRIVATE_PROXY === '1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_REDIRECTS = 5;
 const MANIFEST_MAX_BYTES = 20 * 1024 * 1024; // manifests são pequenos; limite de segurança
@@ -106,6 +114,50 @@ function envProxyFor(targetUrl) {
   return v ? new URL(v) : null;
 }
 
+/** Um IP literal está numa faixa interna (loopback/link-local/privada/ULA)? */
+function isInternalIp(ip) {
+  const v = net.isIP(ip);
+  if (v === 4) {
+    const p = ip.split('.').map(Number);
+    if (p.length !== 4 || p.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return true; // malformado: bloqueia
+    if (p[0] === 127) return true;                                   // 127.0.0.0/8 loopback
+    if (p[0] === 10) return true;                                    // 10.0.0.0/8 privado
+    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;       // 172.16.0.0/12 privado
+    if (p[0] === 192 && p[1] === 168) return true;                   // 192.168.0.0/16 privado
+    if (p[0] === 169 && p[1] === 254) return true;                   // 169.254.0.0/16 link-local (metadata de nuvem)
+    if (p[0] === 0) return true;                                     // 0.0.0.0/8
+    if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true;      // 100.64.0.0/10 CGNAT
+    return false;
+  }
+  if (v === 6) {
+    const a = ip.toLowerCase().replace(/^\[|\]$/g, '');
+    if (a === '::1' || a === '::') return true;                      // loopback / unspecified
+    if (a.startsWith('fe80')) return true;                          // fe80::/10 link-local
+    if (a.startsWith('fc') || a.startsWith('fd')) return true;      // fc00::/7 ULA
+    if (a.startsWith('::ffff:')) return isInternalIp(a.slice(7));   // IPv4 mapeado
+    return false;
+  }
+  return true; // não é um IP reconhecível: trata como bloqueado por segurança
+}
+
+/**
+ * Resolve o hostname do alvo e reprova se QUALQUER endereço cair numa faixa
+ * interna — evita SSRF drive-by (o proxy é aberto, então sem isto qualquer
+ * site poderia ler localhost/metadata de nuvem/serviços internos através
+ * dele). Nomes óbvios de loopback também são barrados antes do DNS.
+ * cb(blocked: boolean).
+ */
+function isBlockedTarget(hostname, cb) {
+  if (ALLOW_PRIVATE_PROXY) return cb(false);
+  const h = (hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h.endsWith('.localhost')) return cb(true);
+  if (net.isIP(h)) return cb(isInternalIp(h));
+  dns.lookup(h, { all: true }, (err, addrs) => {
+    if (err || !addrs || !addrs.length) return cb(true); // não resolveu: bloqueia
+    cb(addrs.some((a) => isInternalIp(a.address)));
+  });
+}
+
 /**
  * Faz GET em targetUrl (string), seguindo redirects, e chama
  * cb(err, upstreamResponse, finalUrl).
@@ -120,6 +172,20 @@ function upstreamGet(targetUrl, clientHeaders, redirectsLeft, cb) {
   if (target.protocol !== 'http:' && target.protocol !== 'https:') {
     return cb(Object.assign(new Error('Apenas http/https são suportados'), { status: 400 }));
   }
+
+  // Bloqueia alvos internos ANTES de conectar. Isto roda também a cada
+  // redirect (upstreamGet é recursivo em onResponse), cobrindo o caso de um
+  // Location apontando para a rede interna.
+  isBlockedTarget(target.hostname, (blocked) => {
+    if (blocked) {
+      return cb(Object.assign(
+        new Error('Alvo interno/privado bloqueado (defina ALLOW_PRIVATE_PROXY=1 só em rede confiável)'),
+        { status: 403 }));
+    }
+    doUpstreamRequest();
+  });
+
+  function doUpstreamRequest() {
 
   const headers = {
     'user-agent': clientHeaders['user-agent'] || 'stream-inspector/1.0',
@@ -200,6 +266,7 @@ function upstreamGet(targetUrl, clientHeaders, redirectsLeft, cb) {
   });
   connectReq.on('error', (e) => cb(Object.assign(e, { status: 502 })));
   connectReq.end();
+  } // fim de doUpstreamRequest
 }
 
 /* ---------------------------------------------------------------- *
@@ -267,17 +334,16 @@ function handleProxy(req, res, urlPath, search) {
 
   upstreamGet(targetUrl, req.headers, MAX_REDIRECTS, (err, upstream, finalUrl) => {
     if (err) {
-      res.writeHead(err.status || 502, {
-        'content-type': 'text/plain; charset=utf-8',
-        'access-control-allow-origin': '*',
-      });
+      res.writeHead(err.status || 502, { 'content-type': 'text/plain; charset=utf-8' });
       return res.end(`Erro ao buscar ${targetUrl}\n${err.message}`);
     }
 
     const contentType = upstream.headers['content-type'] || '';
+    // Sem access-control-allow-origin aqui de propósito: o app é servido pela
+    // MESMA origem deste servidor, então a inspeção normal (fetch same-origin)
+    // não precisa de CORS. Anunciar ACAO:* transformaria o proxy num vetor de
+    // leitura cross-origin para qualquer site (SSRF drive-by amplificado).
     const baseHeaders = {
-      'access-control-allow-origin': '*',
-      'access-control-expose-headers': '*',
       'cache-control': 'no-store',
       'x-final-url': finalUrl,
     };
@@ -370,9 +436,14 @@ function handleThrottle(res, search) {
  */
 const YT_HOSTS = /^(?:www\.|m\.)?(?:youtube\.com|youtube-nocookie\.com|youtu\.be)$/i;
 
+/** decodeURIComponent que nunca lança (retorna '' em %-encoding malformado). */
+function safeDecode(s) {
+  try { return decodeURIComponent(s); } catch { return ''; }
+}
+
 function handleResolve(res, search) {
   const m = (search || '').match(/[?&]url=([^&]+)/);
-  const url = m ? decodeURIComponent(m[1]) : '';
+  const url = m ? safeDecode(m[1]) : '';
   let host;
   try { host = new URL(url).hostname; } catch { host = null; }
   if (!host || !YT_HOSTS.test(host)) {
@@ -453,15 +524,25 @@ const GLOBOPLAY_HOSTS = /^(?:www\.)?globoplay\.globo\.com$/i;
 const GLOBOPLAY_SESSION_PATH = path.join(DATA_DIR, 'globoplay-session.json');
 const GLOBOPLAY_RESOLVE_TIMEOUT_MS = 20000;
 const MANIFEST_URL_RE = /\.(m3u8|mpd)(\?|$)/i;
+// Cada resolução lança um Chromium headless inteiro — caro. Sem este guard,
+// chamadas em rajada spawnariam navegadores até esgotar CPU/RAM da máquina.
+let globoplayResolving = false;
 
 async function handleResolveGloboplay(res, search) {
   const m = (search || '').match(/[?&]url=([^&]+)/);
-  const url = m ? decodeURIComponent(m[1]) : '';
+  const url = m ? safeDecode(m[1]) : '';
   let host;
   try { host = new URL(url).hostname; } catch { host = null; }
   if (!host || !GLOBOPLAY_HOSTS.test(host)) {
     res.writeHead(400, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ error: 'URL do Globoplay inválida ou host não suportado.' }));
+  }
+  if (globoplayResolving) {
+    res.writeHead(429, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({
+      error: 'Já há uma resolução do Globoplay em andamento. Aguarde alguns segundos e tente de novo.',
+      code: 'BUSY',
+    }));
   }
   if (!fs.existsSync(GLOBOPLAY_SESSION_PATH)) {
     res.writeHead(412, { 'content-type': 'application/json' });
@@ -483,6 +564,7 @@ async function handleResolveGloboplay(res, search) {
   }
 
   let browser;
+  globoplayResolving = true;
   try {
     browser = await chromium.launch({
       headless: true,
@@ -533,10 +615,12 @@ async function handleResolveGloboplay(res, search) {
     }
   } finally {
     if (browser) { try { await browser.close(); } catch { /* já fechado */ } }
+    globoplayResolving = false;
   }
 }
 
 const HISTORY_BODY_MAX_BYTES = 2 * 1024 * 1024; // resumo estático, não a telemetria inteira
+const HISTORY_MAX_ROWS = 500; // teto de linhas guardadas (defesa em profundidade contra DoS de disco)
 
 function readJsonBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
@@ -585,6 +669,11 @@ async function handleHistorySave(req, res) {
       body.drm || null,
       JSON.stringify(body.summary)
     );
+    // poda para as N mais recentes — limita o crescimento do arquivo mesmo se
+    // o guard same-origin for contornado de algum modo
+    historyDb.prepare(
+      'DELETE FROM inspections WHERE id NOT IN (SELECT id FROM inspections ORDER BY ts DESC, id DESC LIMIT ?)'
+    ).run(HISTORY_MAX_ROWS);
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     res.end(JSON.stringify({ ok: true, id: Number(info.lastInsertRowid) }));
   } catch (e) {
@@ -619,9 +708,20 @@ function handleHistoryList(res, search) {
 }
 
 function handleStatic(req, res, urlPath) {
-  let rel = decodeURIComponent(urlPath);
-  if (rel === '/') rel = '/index.html';
-  const filePath = path.join(PUBLIC_DIR, rel);
+  let rel, filePath;
+  try {
+    // decodeURIComponent lança em %-encoding malformado (ex.: "/%"); path.join
+    // lança em null byte ("/%00"). Antes esses erros propagavam de forma
+    // síncrona e derrubavam o processo inteiro (uncaughtException). Agora
+    // viram 400.
+    rel = decodeURIComponent(urlPath);
+    if (rel.includes('\0')) throw new Error('null byte'); // fs.stat lançaria de forma síncrona
+    if (rel === '/') rel = '/index.html';
+    filePath = path.join(PUBLIC_DIR, rel);
+  } catch (e) {
+    res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+    return res.end('Caminho inválido');
+  }
   if (!filePath.startsWith(PUBLIC_DIR + path.sep) && filePath !== PUBLIC_DIR) {
     res.writeHead(403);
     return res.end('Proibido');
@@ -640,34 +740,99 @@ function handleStatic(req, res, urlPath) {
   });
 }
 
+/**
+ * Aprova requisições same-origin (o próprio app), ferramentas de linha de
+ * comando e navegações diretas — que não mandam Origin, ou mandam um Origin
+ * que bate com o host do servidor. Reprova só quando há um Origin/Referer de
+ * uma ORIGEM EXTERNA explícita (um site aberto no navegador tentando acionar
+ * os endpoints caros/de escrita). Não é uma fronteira de autenticação, é uma
+ * defesa contra CSRF/abuso cross-origin num app single-user local.
+ */
+function isSameOrigin(req) {
+  const origin = req.headers.origin;
+  const referer = req.headers.referer;
+  const src = origin || referer;
+  if (!src) return true; // sem Origin/Referer: curl, navegação direta, same-origin simples
+  let srcHost;
+  try { srcHost = new URL(src).host; } catch { return false; }
+  const selfHost = req.headers.host;
+  return srcHost === selfHost;
+}
+
+function denyCrossOrigin(res) {
+  res.writeHead(403, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ error: 'Requisição cross-origin recusada para este endpoint.' }));
+}
+
+/**
+ * Preflight CORS restritivo: ecoa a origem SÓ quando ela é a própria (host do
+ * servidor). Antes respondia access-control-allow-origin:* de forma global, o
+ * que autorizava qualquer site a fazer POST/PUT cross-origin nos endpoints.
+ */
+function handlePreflight(req, res) {
+  const headers = {
+    'access-control-allow-methods': 'GET, HEAD, OPTIONS, POST',
+    'access-control-allow-headers': 'content-type',
+    vary: 'Origin',
+  };
+  if (isSameOrigin(req) && req.headers.origin) {
+    headers['access-control-allow-origin'] = req.headers.origin;
+  }
+  res.writeHead(204, headers);
+  res.end();
+}
+
 const server = http.createServer((req, res) => {
+  // Rede de segurança: um throw síncrono no roteamento (ex.: entrada
+  // malformada) NUNCA deve derrubar o processo — responde 500 e segue.
+  try {
+    routeRequest(req, res);
+  } catch (e) {
+    if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Erro interno');
+  }
+});
+
+function routeRequest(req, res) {
   const qIdx = req.url.indexOf('?');
   const urlPath = qIdx === -1 ? req.url : req.url.slice(0, qIdx);
   const search = qIdx === -1 ? '' : req.url.slice(qIdx);
 
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'access-control-allow-origin': '*',
-      'access-control-allow-methods': 'GET, HEAD, OPTIONS, POST',
-      'access-control-allow-headers': '*',
-    });
-    return res.end();
+  if (req.method === 'OPTIONS') return handlePreflight(req, res);
+
+  if (req.method === 'POST' && urlPath === '/api/history') {
+    if (!isSameOrigin(req)) return denyCrossOrigin(res);
+    return handleHistorySave(req, res);
   }
-  if (req.method === 'POST' && urlPath === '/api/history') return handleHistorySave(req, res);
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405);
     return res.end('Método não permitido');
   }
 
   if (urlPath.startsWith('/p/')) return handleProxy(req, res, urlPath, search);
-  if (urlPath === '/throttle') return handleThrottle(res, search);
-  if (urlPath === '/resolve') return handleResolve(res, search);
-  if (urlPath === '/resolve-globoplay') return handleResolveGloboplay(res, search);
+  // Endpoints caros / que mudam estado: barram origem externa explícita para
+  // não serem acionados por um site aberto no navegador do usuário.
+  if (urlPath === '/throttle') {
+    if (!isSameOrigin(req)) return denyCrossOrigin(res);
+    return handleThrottle(res, search);
+  }
+  if (urlPath === '/resolve') {
+    if (!isSameOrigin(req)) return denyCrossOrigin(res);
+    return handleResolve(res, search);
+  }
+  if (urlPath === '/resolve-globoplay') {
+    if (!isSameOrigin(req)) return denyCrossOrigin(res);
+    return handleResolveGloboplay(res, search);
+  }
   if (urlPath === '/api/history') return handleHistoryList(res, search);
   return handleStatic(req, res, urlPath);
-});
+}
 
 server.listen(PORT, HOST, () => {
-  console.log(`Stream Inspector rodando em http://localhost:${PORT}`);
+  console.log(`Stream Inspector rodando em http://localhost:${PORT} (host: ${HOST})`);
   console.log(`Proxy de CORS ativo em /p/<scheme>/<host>/<caminho>`);
 });
+
+// Uma requisição malformada não pode tirar o servidor do ar — loga e segue.
+process.on('uncaughtException', (e) => console.error('uncaughtException:', e && e.message));
+process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e && (e.message || e)));

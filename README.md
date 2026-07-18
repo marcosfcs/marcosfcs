@@ -65,6 +65,24 @@ cabeçalhos CORS (`Access-Control-Allow-Origin`).
 (único recurso que usa uma dependência real, ver seção abaixo) — todo o resto do
 app roda sem ele.
 
+### Segurança / rede
+
+O `server.js` é uma ferramenta local single-user e foi endurecido com isso em mente:
+
+- **Escuta só em `127.0.0.1` por padrão.** Para expor na rede (só faça em rede
+  confiável): `HOST=0.0.0.0 node server.js`.
+- **O proxy `/p/` bloqueia alvos internos** (loopback, `169.254.0.0/16` de metadata
+  de nuvem, faixas privadas). Para inspecionar streams de uma rede interna de
+  propósito: `ALLOW_PRIVATE_PROXY=1 node server.js` (de novo, só em rede confiável).
+  As respostas do proxy **não** trazem `Access-Control-Allow-Origin`, então nenhum
+  site externo consegue ler o que o proxy buscou.
+- **Endpoints caros/de escrita** (`/resolve`, `/resolve-globoplay`, `/throttle`,
+  `POST /api/history`) recusam requisições de origem externa explícita (defesa
+  contra um site aberto no navegador acionar essas rotas).
+- **A sessão do Globoplay** (`data/globoplay-session.json`) contém cookies de
+  autenticação em texto puro; é gravada com modo `600`, fica fora do git e nunca é
+  servida como arquivo estático. Não compartilhe esse arquivo.
+
 ## YouTube (opcional)
 
 URLs do YouTube (`youtube.com/watch`, `youtu.be`, lives) são suportadas através de
