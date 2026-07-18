@@ -361,22 +361,23 @@ function handleThrottle(res, search) {
 }
 
 /**
- * Resolve uma URL do YouTube/Globoplay em manifest/mídia via yt-dlp LOCAL.
+ * Resolve uma URL do YouTube em manifest/mídia via yt-dlp LOCAL.
  * O sistema não decodifica assinaturas/DRM — delega inteiramente ao yt-dlp,
  * que o usuário instala (pip install yt-dlp). Restrito a uma allowlist de
  * hosts conhecidos para não virar um resolvedor/downloader genérico.
+ * (Globoplay usa um resolvedor à parte — ver handleResolveGloboplay — porque
+ * yt-dlp não tem suporte a esse conteúdo.)
  */
 const YT_HOSTS = /^(?:www\.|m\.)?(?:youtube\.com|youtube-nocookie\.com|youtu\.be)$/i;
-const GLOBOPLAY_HOSTS = /^(?:www\.)?globoplay\.globo\.com$/i;
 
 function handleResolve(res, search) {
   const m = (search || '').match(/[?&]url=([^&]+)/);
   const url = m ? decodeURIComponent(m[1]) : '';
   let host;
   try { host = new URL(url).hostname; } catch { host = null; }
-  if (!host || !(YT_HOSTS.test(host) || GLOBOPLAY_HOSTS.test(host))) {
+  if (!host || !YT_HOSTS.test(host)) {
     res.writeHead(400, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-    return res.end(JSON.stringify({ error: 'URL inválida ou host não suportado (apenas YouTube/Globoplay).' }));
+    return res.end(JSON.stringify({ error: 'URL do YouTube inválida ou host não suportado.' }));
   }
 
   execFile(
@@ -430,6 +431,109 @@ function handleResolve(res, search) {
       res.end(JSON.stringify(slim));
     }
   );
+}
+
+/**
+ * Resolve uma URL do Globoplay achando a URL do manifest HLS/DASH REAL que o
+ * player da página busca via JS — diferente do YouTube, isso não está
+ * embutido estaticamente no HTML nem o yt-dlp sabe extrair, só aparece numa
+ * requisição de rede depois que a página carrega e o player inicializa.
+ *
+ * Por isso a única forma é um navegador de verdade: Playwright headless
+ * carrega a página, escuta as requisições, e pega a primeira que bater
+ * .m3u8/.mpd. O conteúdo ao vivo exige login — reaproveita uma sessão salva
+ * uma única vez via scripts/globoplay-login.js (browserContext.storageState),
+ * nunca pede/guarda credenciais aqui.
+ *
+ * O sistema não tenta contornar DRM/paywall: se a sessão salva expirou (cai
+ * numa tela de login) ou o conteúdo não expõe o manifest por algum outro
+ * motivo, isso falha com um erro específico em vez de tentar burlar.
+ */
+const GLOBOPLAY_HOSTS = /^(?:www\.)?globoplay\.globo\.com$/i;
+const GLOBOPLAY_SESSION_PATH = path.join(DATA_DIR, 'globoplay-session.json');
+const GLOBOPLAY_RESOLVE_TIMEOUT_MS = 20000;
+const MANIFEST_URL_RE = /\.(m3u8|mpd)(\?|$)/i;
+
+async function handleResolveGloboplay(res, search) {
+  const m = (search || '').match(/[?&]url=([^&]+)/);
+  const url = m ? decodeURIComponent(m[1]) : '';
+  let host;
+  try { host = new URL(url).hostname; } catch { host = null; }
+  if (!host || !GLOBOPLAY_HOSTS.test(host)) {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'URL do Globoplay inválida ou host não suportado.' }));
+  }
+  if (!fs.existsSync(GLOBOPLAY_SESSION_PATH)) {
+    res.writeHead(412, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({
+      error: 'Nenhuma sessão do Globoplay salva. Rode "node scripts/globoplay-login.js" uma vez (faz login manual num navegador visível) antes de inspecionar URLs do Globoplay.',
+      code: 'NO_SESSION',
+    }));
+  }
+
+  let chromium;
+  try {
+    ({ chromium } = require('playwright'));
+  } catch (e) {
+    res.writeHead(501, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({
+      error: 'Playwright não está instalado. Rode "npm install" e "npx playwright install chromium" na máquina que roda o server.js.',
+      code: 'NO_PLAYWRIGHT',
+    }));
+  }
+
+  let browser;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined,
+    });
+    const context = await browser.newContext({ storageState: GLOBOPLAY_SESSION_PATH });
+    const page = await context.newPage();
+
+    const manifestUrl = await new Promise((resolve, reject) => {
+      let done = false;
+      const finish = (fn) => { if (done) return; done = true; clearTimeout(timer); fn(); };
+      const onRequest = (req) => {
+        const reqUrl = req.url();
+        if (MANIFEST_URL_RE.test(reqUrl)) finish(() => resolve(reqUrl));
+      };
+      page.on('request', onRequest);
+      const timer = setTimeout(() => {
+        finish(() => reject(Object.assign(new Error('timeout'), { code: 'TIMEOUT' })));
+      }, GLOBOPLAY_RESOLVE_TIMEOUT_MS);
+
+      page.goto(url, { waitUntil: 'domcontentloaded', timeout: GLOBOPLAY_RESOLVE_TIMEOUT_MS }).then(() => {
+        // sessão expirada normalmente redireciona pra uma URL de login
+        const finalUrl = page.url();
+        if (!done && /login|entrar|signin/i.test(finalUrl) && !MANIFEST_URL_RE.test(finalUrl)) {
+          finish(() => reject(Object.assign(new Error('session expired'), { code: 'SESSION_EXPIRED' })));
+        }
+      }).catch(() => { /* navegação pode falhar mesmo com sucesso na captura da request — ignora aqui */ });
+    });
+
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ manifestUrl, type: /\.mpd/i.test(manifestUrl) ? 'dash' : 'hls' }));
+  } catch (e) {
+    if (e.code === 'SESSION_EXPIRED') {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'Sessão do Globoplay expirada (redirecionou para login). Rode "node scripts/globoplay-login.js" de novo.',
+        code: 'SESSION_EXPIRED',
+      }));
+    } else if (e.code === 'TIMEOUT') {
+      res.writeHead(504, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'Não encontrou a URL do manifest a tempo — a página pode ter mudado de estrutura, ou o conteúdo pode estar bloqueado/indisponível.',
+        code: 'TIMEOUT',
+      }));
+    } else {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Falha ao resolver via Playwright: ' + e.message }));
+    }
+  } finally {
+    if (browser) { try { await browser.close(); } catch { /* já fechado */ } }
+  }
 }
 
 const HISTORY_BODY_MAX_BYTES = 2 * 1024 * 1024; // resumo estático, não a telemetria inteira
@@ -558,6 +662,7 @@ const server = http.createServer((req, res) => {
   if (urlPath.startsWith('/p/')) return handleProxy(req, res, urlPath, search);
   if (urlPath === '/throttle') return handleThrottle(res, search);
   if (urlPath === '/resolve') return handleResolve(res, search);
+  if (urlPath === '/resolve-globoplay') return handleResolveGloboplay(res, search);
   if (urlPath === '/api/history') return handleHistoryList(res, search);
   return handleStatic(req, res, urlPath);
 });

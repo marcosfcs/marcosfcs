@@ -1535,34 +1535,30 @@ async function inspectYouTube(url) {
  * contornar, a resolução falha aqui mesmo — sem tentativa de bypass.
  */
 async function inspectGloboplay(url) {
-  logEvent('URL do Globoplay detectada — resolvendo via yt-dlp local (uso sujeito aos Termos do Globoplay).');
-  setStatus('Resolvendo com yt-dlp…', 'busy');
+  logEvent('URL do Globoplay detectada — resolvendo via navegador headless local (Playwright).');
+  setStatus('Abrindo um Chromium headless para localizar o manifest (pode levar alguns segundos)…', 'busy');
 
-  let info;
+  let body;
   try {
-    const r = await fetch('/resolve?url=' + encodeURIComponent(url));
-    const body = await r.json().catch(() => ({}));
+    const r = await fetch('/resolve-globoplay?url=' + encodeURIComponent(url));
+    body = await r.json().catch(() => ({}));
     if (!r.ok) {
-      const hint = body.code === 'NO_YTDLP'
-        ? ' Instale o yt-dlp e sirva a página por "node server.js".'
-        : '';
-      setStatus('Não foi possível resolver a URL do Globoplay: ' + (body.error || `HTTP ${r.status}`) + hint, 'error');
+      let hint = '';
+      if (body.code === 'NO_SESSION' || body.code === 'SESSION_EXPIRED') {
+        hint = ' Rode "node scripts/globoplay-login.js" (login manual único) e tente de novo.';
+      } else if (body.code === 'NO_PLAYWRIGHT') {
+        hint = ' Rode "npm install" e "npx playwright install chromium".';
+      }
+      setStatus((body.error || `HTTP ${r.status}`) + hint, 'error');
       return true;
     }
-    info = body;
   } catch (e) {
-    setStatus('Falha ao chamar o resolvedor local (/resolve requer o server.js): ' + e.message, 'error');
+    setStatus('Falha ao chamar o resolvedor local (/resolve-globoplay requer o server.js): ' + e.message, 'error');
     return true;
   }
 
-  const manifestUrl = StreamGloboplay.pickManifestUrl(info);
-  if (!manifestUrl) {
-    setStatus('O yt-dlp não retornou uma URL de manifest para este conteúdo do Globoplay (pode exigir login/assinatura, ou ser protegido por DRM incompatível).', 'error');
-    return true;
-  }
-
-  logEvent(`Globoplay: "${info.title || info.id || url}" — manifest localizado, usando o pipeline de inspeção completo.`);
-  await inspect(manifestUrl);
+  logEvent(`Globoplay: manifest ${body.type === 'dash' ? 'DASH' : 'HLS'} localizado — usando o pipeline de inspeção completo.`);
+  await inspect(body.manifestUrl);
   return true;
 }
 

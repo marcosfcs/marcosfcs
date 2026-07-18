@@ -49,7 +49,8 @@ ffmpeg -i distorcido.mp4 -i referencia.mp4 \
 
 ## Como rodar
 
-Requer apenas Node.js (≥16, sem dependências externas):
+Requer apenas Node.js (≥16). O core do inspetor não tem dependências externas —
+`node server.js` funciona direto, sem `npm install`:
 
 ```bash
 node server.js
@@ -59,6 +60,10 @@ node server.js
 Também funciona hospedado como página estática (`public/`), porém **sem o proxy
 de CORS** — nesse modo só é possível inspecionar streams cuja origem envie
 cabeçalhos CORS (`Access-Control-Allow-Origin`).
+
+`npm install` só é necessário para a resolução automática de URLs do Globoplay
+(único recurso que usa uma dependência real, ver seção abaixo) — todo o resto do
+app roda sem ele.
 
 ## YouTube (opcional)
 
@@ -82,10 +87,48 @@ node server.js           # o endpoint /resolve precisa do servidor
 Uso sujeito aos Termos do YouTube — a ferramenta destina-se a inspeção técnica e a
 responsabilidade é de quem a opera.
 
+## Globoplay (opcional)
+
+URLs do Globoplay (`globoplay.globo.com/.../ao-vivo/<id>/`, por exemplo) são
+suportadas de um jeito diferente do YouTube: o `yt-dlp` não tem suporte a esse
+conteúdo, e a URL do manifest não está no HTML da página — ela só aparece numa
+requisição de rede depois que o player da página carrega e roda seu próprio
+JavaScript. Por isso o resolvedor usa um **navegador Chromium headless de
+verdade** ([Playwright](https://playwright.dev)) para carregar a página e
+escutar a rede até encontrar a URL do manifest (`.m3u8`/`.mpd`).
+
+Conteúdo ao vivo do Globoplay exige uma conta logada (gratuita ou assinante).
+Em vez de pedir para colar cookies manualmente, você faz login **uma única
+vez** numa janela de navegador real que um script abre, e a sessão fica salva
+localmente (nunca é enviada a lugar nenhum além do próprio Globoplay):
+
+```bash
+npm install
+npx playwright install chromium
+node scripts/globoplay-login.js   # abre um Chromium visível — faça login normalmente
+node server.js                    # o endpoint /resolve-globoplay precisa do servidor
+```
+
+A partir daí, colar uma URL do Globoplay e clicar em "Inspecionar" resolve o
+manifest automaticamente e roda o pipeline completo (paridade total com
+qualquer outra URL de manifest). A sessão salva expira com o tempo — quando
+isso acontecer, a UI avisa e basta rodar `node scripts/globoplay-login.js` de
+novo.
+
+**Sem garantias:** o sistema não decodifica DRM/tokens do Globoplay nem tenta
+contornar bloqueios de automação — se a página mudar de estrutura, bloquear
+navegadores headless, ou o conteúdo estiver protegido de um jeito que o
+Playwright não consiga acessar mesmo logado, a resolução falha com uma
+mensagem clara em vez de tentar burlar. Conteúdo com DRM continua podendo ser
+**inspecionado** (estrutura do manifest, variantes, DRM declarado), só não
+**reproduzido** de fato sem uma licença válida.
+
 ## Arquitetura
 
 ```
-server.js                 servidor estático + proxy de CORS (Node puro, zero deps)
+server.js                 servidor estático + proxy de CORS (Node puro; Playwright é opcional,
+                           só para /resolve-globoplay)
+scripts/globoplay-login.js login único do Globoplay (salva sessão em data/, fora do git)
 public/
   index.html              UI (campo de URL + botão + seções de resultado)
   css/style.css           tokens de design (light/dark automático)
@@ -93,6 +136,7 @@ public/
   js/charts.js            gráficos em canvas (séries temporais, curvas, degraus)
   js/analyzer.js          análise de cor por frame (histogramas RGB/luma, clipping)
   js/youtube.js           mapeia o JSON do yt-dlp → modelo do inspetor (YouTube)
+  js/globoplay.js         detecção de URL do Globoplay (resolução em si é 100% server-side)
   js/app.js               orquestração: fetch → parse → tabelas → playback → telemetria
   vendor/hls.min.js       playback HLS (hls.js)
   vendor/dash.all.min.js  playback DASH (dash.js)

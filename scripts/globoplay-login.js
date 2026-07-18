@@ -1,0 +1,59 @@
+#!/usr/bin/env node
+/**
+ * Login único no Globoplay para a resolução automática de manifest funcionar.
+ *
+ * O conteúdo ao vivo do Globoplay exige uma conta logada (gratuita ou
+ * assinante). Este script abre um Chromium REAL E VISÍVEL, deixa você fazer
+ * login manualmente como faria normalmente, e salva a sessão (cookies +
+ * localStorage) em data/globoplay-session.json — o server.js reaproveita
+ * esse arquivo depois, em modo headless, para resolver URLs do Globoplay
+ * sem pedir login de novo (até a sessão expirar, aí é só rodar este script
+ * de novo).
+ *
+ * Uso:
+ *   node scripts/globoplay-login.js
+ *
+ * A sessão fica só na sua máquina (data/ está no .gitignore) — nunca é
+ * enviada a lugar nenhum além do próprio Globoplay.
+ */
+'use strict';
+
+const path = require('path');
+const fs = require('fs');
+const readline = require('readline');
+
+const DATA_DIR = path.join(__dirname, '..', 'data');
+const SESSION_PATH = path.join(DATA_DIR, 'globoplay-session.json');
+
+function waitForEnter(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => rl.question(question, () => { rl.close(); resolve(); }));
+}
+
+async function main() {
+  let chromium;
+  try {
+    ({ chromium } = require('playwright'));
+  } catch (e) {
+    console.error('Playwright não está instalado. Rode "npm install" e depois "npx playwright install chromium" antes deste script.');
+    process.exit(1);
+  }
+
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+
+  console.log('Abrindo um Chromium visível — faça login no Globoplay normalmente na janela que vai abrir.');
+  const browser = await chromium.launch({ headless: false });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto('https://globoplay.globo.com/', { waitUntil: 'domcontentloaded' });
+
+  await waitForEnter('\nDepois de terminar o login no navegador, volte aqui e aperte Enter para salvar a sessão... ');
+
+  await context.storageState({ path: SESSION_PATH });
+  await browser.close();
+
+  console.log(`Sessão salva em ${SESSION_PATH}.`);
+  console.log('Pronto — o app já pode resolver URLs do Globoplay automaticamente até essa sessão expirar.');
+}
+
+main().catch((e) => { console.error('Erro:', e.message); process.exit(1); });
