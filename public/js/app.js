@@ -23,6 +23,11 @@ const state = {
   analyzer: null,
   t0: 0,
   lastDropped: 0,
+  lastTotalFrames: 0,
+  lastQuality: null,   // último getVideoPlaybackQuality() (stash de updateTiles)
+  dropAccum: 0,        // frames descartados acumulados desde o último log
+  lastDropLogT: 0,     // throttle do log de dropped frames
+  lastDropRate: null,  // taxa de descarte do tick corrente (p/ alerta highDropRate)
   drmBlocked: false,
   lastPlay: null,      // { type, url, model, isLive } — p/ trocar de motor sem re-inspecionar
 
@@ -602,6 +607,7 @@ function updateTiles(t) {
   $('#tile-time').textContent = fmtClock(video.currentTime || 0);
   $('#tile-res').textContent = video.videoWidth ? `${video.videoWidth}×${video.videoHeight}` : '—';
   const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+  state.lastQuality = q; // reaproveitado pelo tick para o delta/log de dropped frames
   if (q) $('#tile-dropped').textContent = `${q.droppedVideoFrames} / ${q.totalVideoFrames}`;
   const states = video.paused ? 'pausado' : video.readyState < 3 ? 'carregando' : 'reproduzindo';
   $('#tile-state').textContent = states;
@@ -633,6 +639,18 @@ function setupAlertEngine(model, isLive) {
     test: (c) => {
       if (!playing() || !c.timeAdvancing || c.freezeDiff == null) return null;
       return c.freezeDiff < 0.5;
+    },
+  });
+  // Stall (stale): o relógio de mídia PAROU enquanto o player deveria estar
+  // tocando — diferente do freeze (frame estático COM o tempo avançando) e do
+  // rebuffering (readyState cai <3, então playing() vira false e não conta).
+  engine.register('stall', {
+    label: 'Reprodução travada (relógio de mídia parado / stall)',
+    severity: 'critical',
+    sustainSec: 1,
+    test: (c) => {
+      if (!playing()) return null;
+      return c.timeAdvancing === false;
     },
   });
   engine.register('black', {
@@ -680,6 +698,17 @@ function setupAlertEngine(model, isLive) {
       return c.fps < c.nominalFps * 0.5;
     },
   });
+  // Descarte de frames PERSISTENTE (>5% dos frames do tick) — bursts isolados
+  // saem só como linha de log throttled; aqui só entra o descarte sustentado.
+  engine.register('highDropRate', {
+    label: 'Taxa alta de descarte de frames (decoder/CPU sobrecarregado)',
+    severity: 'warning',
+    sustainSec: 10,
+    test: (c) => {
+      if (!playing() || c.dropRate == null) return null;
+      return c.dropRate > 0.05;
+    },
+  });
   engine.register('loudness', {
     label: 'Loudness (Integrated) acima do limite de compliance',
     severity: 'warning',
@@ -714,6 +743,11 @@ function startTelemetry(model, isLive) {
   // de motor), sobrepondo pontos novos em cima dos antigos.
   if (state.t0 == null) state.t0 = performance.now();
   state.lastDropped = 0;
+  state.lastTotalFrames = 0;
+  state.lastQuality = null;
+  state.dropAccum = 0;
+  state.lastDropLogT = 0;
+  state.lastDropRate = null;
   state.lastCurrentTime = video.currentTime;
   let colorTick = 0;
 
@@ -830,6 +864,28 @@ function startTelemetry(model, isLive) {
     state.timeAdvancing = video.currentTime > state.lastCurrentTime + 0.01;
     state.lastCurrentTime = video.currentTime;
 
+    // frames descartados (dropped): delta desde o último tick → log agregado e
+    // throttled (~2s), e taxa do tick p/ o alerta highDropRate. Usa o
+    // getVideoPlaybackQuality() já lido em updateTiles (state.lastQuality).
+    const q = state.lastQuality;
+    if (q) {
+      const dDrop = Math.max(0, q.droppedVideoFrames - state.lastDropped);
+      const dTotal = Math.max(0, q.totalVideoFrames - state.lastTotalFrames);
+      state.lastDropRate = dTotal > 0 ? dDrop / dTotal : (dDrop > 0 ? 1 : 0);
+      state.dropAccum += dDrop;
+      if (state.dropAccum > 0 && t - state.lastDropLogT >= 2) {
+        const pct = q.totalVideoFrames > 0
+          ? ((q.droppedVideoFrames / q.totalVideoFrames) * 100).toFixed(1).replace('.', ',')
+          : '—';
+        logEvent(`Descartou ${state.dropAccum} frame(s) de vídeo (dropped) — total ` +
+          `${q.droppedVideoFrames}/${q.totalVideoFrames} (${pct}%)`);
+        state.dropAccum = 0;
+        state.lastDropLogT = t;
+      }
+      state.lastDropped = q.droppedVideoFrames;
+      state.lastTotalFrames = q.totalVideoFrames;
+    }
+
     // áudio → série temporal
     if (state.lastAudio) {
       state.charts.audioLevel && state.charts.audioLevel.push(t, { l: state.lastAudio.dbfsL, r: state.lastAudio.dbfsR });
@@ -881,6 +937,7 @@ function startTelemetry(model, isLive) {
         avgLuma: state.lastColor ? state.lastColor.avgLuma : null,
         freezeDiff: state.lastFreezeDiff,
         timeAdvancing: state.timeAdvancing,
+        dropRate: state.lastDropRate,
         fps: state.qoe ? state.qoe.fps : null,
         nominalFps: state.qoe ? state.qoe.nominalFps : null,
         manifestAgeSec: state.netmon && isLive ? state.netmon.manifestAgeSec() : null,
