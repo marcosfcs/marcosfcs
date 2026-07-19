@@ -22,6 +22,7 @@ const state = {
   timer: null,
   analyzer: null,
   t0: 0,
+  forcedLevel: -1,     // -1 = ABR automático; >=0 = nível travado manualmente
   lastDropped: 0,
   lastTotalFrames: 0,
   lastQuality: null,   // último getVideoPlaybackQuality() (stash de updateTiles)
@@ -854,6 +855,7 @@ function startTelemetry(model, isLive) {
       } catch { /* player ainda inicializando */ }
     }
     state.charts.bitrate && state.charts.bitrate.push(t, { level, bw });
+    refreshLadderActive(); // atualiza a marcação de nível ativo/travado nas pills
     if (level != null) $('#tile-bitrate').textContent = level.toFixed(2).replace('.', ',') + ' Mbps';
     if (bw != null) $('#tile-bw').textContent = bw.toFixed(1).replace('.', ',') + ' Mbps';
     if (latency != null && !isNaN(latency)) $('#tile-latency').textContent = latency.toFixed(1).replace('.', ',') + 's';
@@ -1111,9 +1113,152 @@ function cmcdContentId() {
   return state.sessionUrl ? state.sessionUrl.split('/').pop().slice(0, 64) : 'stream-inspector';
 }
 
+/* ================================================================ *
+ * Seleção manual de ladder (variantes) — desliga o ABR do motor
+ * ================================================================ */
+
+/**
+ * Lê o ladder de vídeo do motor ATIVO, normalizado:
+ *   { levels: [{ i, width, height, bitrate }], activeIndex, auto }
+ * `i` é o índice que setLadder() usa (específico do motor). Retorna null
+ * enquanto o motor ainda não conhece os níveis (antes de MANIFEST_PARSED etc.).
+ */
+function getLadder() {
+  const p = state.player;
+  if (!p) return null;
+  try {
+    if (state.playerKind === 'hls') {
+      const levels = (p.levels || []).map((lv, i) => ({ i, width: lv.width, height: lv.height, bitrate: lv.bitrate }));
+      if (!levels.length) return null;
+      return { levels, activeIndex: p.currentLevel, auto: p.autoLevelEnabled };
+    }
+    if (state.playerKind === 'dash') {
+      const list = p.getBitrateInfoListFor('video') || [];
+      if (!list.length) return null;
+      const levels = list.map((b, i) => ({ i: b.qualityIndex != null ? b.qualityIndex : i, width: b.width, height: b.height, bitrate: b.bitrate }));
+      let auto = true;
+      try { auto = p.getSettings().streaming.abr.autoSwitchBitrate.video !== false; } catch { /* default */ }
+      return { levels, activeIndex: auto ? -1 : p.getQualityFor('video'), auto };
+    }
+    if (state.playerKind === 'shaka') {
+      const tracks = p.getVariantTracks().filter((t) => t.type === 'variant');
+      // agrupa por resolução/bitrate de vídeo (uma pill por variante de vídeo)
+      const seen = new Map();
+      for (const t of tracks) {
+        const key = `${t.width}x${t.height}@${t.videoBandwidth || t.bandwidth}`;
+        if (!seen.has(key)) seen.set(key, { i: t.id, width: t.width, height: t.height, bitrate: t.videoBandwidth || t.bandwidth });
+      }
+      const levels = Array.from(seen.values());
+      if (!levels.length) return null;
+      const active = tracks.find((t) => t.active);
+      let auto = true;
+      try { auto = p.getConfiguration().abr.enabled !== false; } catch { /* default */ }
+      return { levels, activeIndex: auto ? -1 : (active ? active.id : -1), auto };
+    }
+  } catch { /* motor ainda inicializando */ }
+  return null;
+}
+
+/** Trava o motor no nível `idx` (índice do getLadder), ou volta ao ABR se idx===-1. */
+function setLadder(idx) {
+  const p = state.player;
+  if (!p) return;
+  state.forcedLevel = idx;
+  try {
+    if (state.playerKind === 'hls') {
+      p.currentLevel = idx; // -1 reativa o ABR do hls.js
+    } else if (state.playerKind === 'dash') {
+      if (idx === -1) {
+        p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: true } } } });
+      } else {
+        p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: false } } } });
+        p.setQualityFor('video', idx);
+      }
+    } else if (state.playerKind === 'shaka') {
+      if (idx === -1) {
+        p.configure({ abr: { enabled: true } });
+      } else {
+        p.configure({ abr: { enabled: false } });
+        const track = p.getVariantTracks().find((t) => t.id === idx);
+        if (track) p.selectVariantTrack(track, /* clearBuffer */ true);
+      }
+    }
+  } catch (e) {
+    logEvent('Não foi possível trocar o ladder manualmente: ' + e.message);
+    return;
+  }
+  if (idx === -1) {
+    logEvent('Ladder: ABR automático reativado.');
+  } else {
+    const lad = getLadder();
+    const lv = lad && lad.levels.find((l) => l.i === idx);
+    logEvent(`Ladder travado manualmente → ${lv ? `${lv.width}×${lv.height} @ ${P.fmtBits(lv.bitrate)}` : 'nível ' + idx} (ABR desligado).`);
+  }
+  renderLadderPills();
+}
+
+/** (Re)desenha as pills do ladder a partir do motor ativo. */
+function renderLadderPills() {
+  const picker = $('#ladder-picker');
+  const box = $('#ladder-pills');
+  if (!picker || !box) return;
+
+  // progressivo (YouTube VOD) ou motor sem níveis: esconde o seletor
+  if (state.playerKind === 'progressive') { picker.hidden = true; return; }
+  const lad = getLadder();
+  if (!lad) { picker.hidden = true; return; }
+  picker.hidden = false;
+
+  const forced = state.forcedLevel != null && state.forcedLevel !== -1;
+  box.innerHTML = '';
+
+  // pill "Auto (ABR)"
+  const auto = el('button', 'ladder-pill' + (lad.auto ? ' forced' : ''), 'Auto (ABR)');
+  auto.type = 'button';
+  auto.addEventListener('click', () => setLadder(-1));
+  box.appendChild(auto);
+
+  // pills por variante, do maior p/ o menor bitrate
+  const ordered = lad.levels.slice().sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+  for (const lv of ordered) {
+    const label = `${lv.height ? lv.height + 'p' : (lv.width || '?')} · ${P.fmtBits(lv.bitrate)}`;
+    const cls = 'ladder-pill' +
+      (forced && lv.i === state.forcedLevel ? ' forced' : '') +
+      (!forced && lad.activeIndex === lv.i ? ' active' : ''); // em auto, marca o nível que o ABR toca
+    const pill = el('button', cls, label);
+    pill.type = 'button';
+    pill.title = `${lv.width || '?'}×${lv.height || '?'} @ ${P.fmtBits(lv.bitrate)}`;
+    pill.addEventListener('click', () => setLadder(lv.i));
+    box.appendChild(pill);
+  }
+}
+
+/** Atualiza só a marcação active/forced sem reconstruir (chamado no tick). */
+function refreshLadderActive() {
+  const box = $('#ladder-pills');
+  if (!box || $('#ladder-picker').hidden) return;
+  const lad = getLadder();
+  if (!lad) return;
+  const forced = state.forcedLevel != null && state.forcedLevel !== -1;
+  const pills = box.querySelectorAll('.ladder-pill');
+  // pills[0] = Auto; as demais seguem a ordem de renderLadderPills (por bitrate desc)
+  const ordered = lad.levels.slice().sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+  pills.forEach((pill, idx) => {
+    pill.classList.remove('active', 'forced');
+    if (idx === 0) { if (lad.auto) pill.classList.add('forced'); return; }
+    const lv = ordered[idx - 1];
+    if (!lv) return;
+    if (forced && lv.i === state.forcedLevel) pill.classList.add('forced');
+    else if (!forced && lad.activeIndex === lv.i) pill.classList.add('active');
+  });
+}
+
 function startPlayback(type, url, model, isLive) {
   const video = $('#video');
   state.drmBlocked = false;
+  state.forcedLevel = -1; // toda nova sessão de playback começa em ABR automático
+  $('#ladder-picker').hidden = true;
+  $('#ladder-pills').innerHTML = '';
   $('#color-note-runtime').textContent = '';
   $('#chroma-method-note').textContent = '';
   state.lastPlay = { type, url, model, isLive };
@@ -1153,6 +1298,7 @@ function startPlayback(type, url, model, isLive) {
       state.playerKind = 'hls';
       hls.loadSource(url);
       hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => renderLadderPills());
       hls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
         const lv = hls.levels[d.level];
         if (lv) {
@@ -1176,6 +1322,7 @@ function startPlayback(type, url, model, isLive) {
       player.updateSettings({ streaming: { cmcd: { enabled: true, sid: cmcdSessionId(), cid: cmcdContentId() } } });
     } catch { /* versão sem suporte a CMCD */ }
     player.initialize(video, url, true);
+    player.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => renderLadderPills());
     player.on(dashjs.MediaPlayer.events.QUALITY_CHANGE_RENDERED, (e) => {
       if (e.mediaType !== 'video') return;
       try {
@@ -1234,6 +1381,7 @@ async function startShakaPlayback(video, url, model, isLive) {
     logEvent(`Erro ao carregar no Shaka Player [${e.code || '—'}]: ${e.message || e}`);
     return;
   }
+  renderLadderPills();
 
   video.muted = true;
   video.play().catch(() => logEvent('Autoplay bloqueado — clique no player para iniciar.'));

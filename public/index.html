@@ -194,6 +194,11 @@
             <span id="throttle-state" class="badge badge-info">Sem limite</span>
             <label><input type="checkbox" id="force-proxy" /> Reproduzir via proxy</label>
           </div>
+          <div class="ladder-picker" id="ladder-picker" hidden
+               title="Trava o player numa variante específica (desliga o ABR automático do motor). Clique em 'Auto' para devolver o controle ao ABR.">
+            <span class="engine-picker-label">Qualidade (ladder):</span>
+            <div id="ladder-pills" class="ladder-pills"></div>
+          </div>
           <video id="video" controls muted playsinline></video>
           <div class="tiles">
             <div class="tile"><span class="tile-label">Estado</span><span class="tile-value" id="tile-state">—</span></div>

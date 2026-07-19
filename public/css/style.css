@@ -333,6 +333,28 @@ h3 {
 }
 .engine-picker input { accent-color: var(--accent); cursor: pointer; }
 
+/* ---------- seletor manual de ladder (variantes) ---------- */
+
+.ladder-picker {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 8px; font-size: 13px; color: var(--text-secondary);
+}
+.ladder-pills { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ladder-pill {
+  cursor: pointer;
+  padding: 5px 12px; border-radius: var(--radius-badge); border: 1px solid var(--border);
+  background: transparent; color: var(--text-secondary);
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em;
+}
+.ladder-pill:hover { border-color: var(--accent); color: var(--accent); }
+/* nível que o ABR está tocando agora (quando em auto) — contorno sutil */
+.ladder-pill.active { border-color: var(--color-cyan); color: var(--color-cyan); }
+/* variante travada manualmente (ABR desligado) — destaque forte magenta */
+.ladder-pill.forced {
+  background: rgba(217, 70, 239, 0.16); border-color: var(--accent); color: var(--accent);
+  font-weight: 600;
+}
+
 .net-test {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   margin-bottom: 8px; font-size: 13px; color: var(--text-secondary);
