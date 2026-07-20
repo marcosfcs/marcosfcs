@@ -1213,7 +1213,7 @@ function renderLadderPills() {
   box.innerHTML = '';
 
   // pill "Auto (ABR)"
-  const auto = el('button', 'ladder-pill' + (lad.auto ? ' forced' : ''), 'Auto (ABR)');
+  const auto = el('button', 'track-pill' + (lad.auto ? ' forced' : ''), 'Auto (ABR)');
   auto.type = 'button';
   auto.addEventListener('click', () => setLadder(-1));
   box.appendChild(auto);
@@ -1222,7 +1222,7 @@ function renderLadderPills() {
   const ordered = lad.levels.slice().sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
   for (const lv of ordered) {
     const label = `${lv.height ? lv.height + 'p' : (lv.width || '?')} · ${P.fmtBits(lv.bitrate)}`;
-    const cls = 'ladder-pill' +
+    const cls = 'track-pill' +
       (forced && lv.i === state.forcedLevel ? ' forced' : '') +
       (!forced && lad.activeIndex === lv.i ? ' active' : ''); // em auto, marca o nível que o ABR toca
     const pill = el('button', cls, label);
@@ -1240,7 +1240,7 @@ function refreshLadderActive() {
   const lad = getLadder();
   if (!lad) return;
   const forced = state.forcedLevel != null && state.forcedLevel !== -1;
-  const pills = box.querySelectorAll('.ladder-pill');
+  const pills = box.querySelectorAll('.track-pill');
   // pills[0] = Auto; as demais seguem a ordem de renderLadderPills (por bitrate desc)
   const ordered = lad.levels.slice().sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
   pills.forEach((pill, idx) => {
@@ -1253,12 +1253,216 @@ function refreshLadderActive() {
   });
 }
 
+/* ================================================================ *
+ * Seleção de faixas de ÁUDIO e LEGENDAS/CC no player
+ * ================================================================ */
+
+/** Faixas de áudio do motor ativo: { tracks:[{ id, label }], activeId } ou null. */
+function getAudioTracks() {
+  const p = state.player;
+  if (!p) return null;
+  try {
+    if (state.playerKind === 'hls') {
+      const tracks = (p.audioTracks || []).map((a) => ({
+        id: a.id, label: [a.name, a.lang, a.channels ? a.channels + 'ch' : null].filter(Boolean).join(' · ') || ('faixa ' + a.id),
+      }));
+      return tracks.length ? { tracks, activeId: p.audioTrack } : null;
+    }
+    if (state.playerKind === 'dash') {
+      const list = p.getTracksFor('audio') || [];
+      const tracks = list.map((tr, i) => ({
+        id: tr.index != null ? tr.index : i,
+        label: [tr.lang, (tr.roles || []).join('/'), tr.channelsCount ? tr.channelsCount + 'ch' : null].filter(Boolean).join(' · ') || ('faixa ' + i),
+        _track: tr,
+      }));
+      let cur = null;
+      try { const c = p.getCurrentTrackFor('audio'); cur = c ? (c.index != null ? c.index : null) : null; } catch { /* */ }
+      return tracks.length ? { tracks, activeId: cur } : null;
+    }
+    if (state.playerKind === 'shaka') {
+      const variants = p.getVariantTracks();
+      const seen = new Map();
+      for (const t of variants) {
+        const key = `${t.language}|${(t.audioRoles || []).join('/')}|${t.audioId ?? ''}`;
+        if (!seen.has(key)) seen.set(key, {
+          id: key,
+          label: [t.language, (t.audioRoles || []).join('/'), t.channelsCount ? t.channelsCount + 'ch' : null].filter(Boolean).join(' · ') || 'faixa',
+          _lang: t.language, _roles: t.audioRoles || [],
+        });
+      }
+      const tracks = Array.from(seen.values());
+      const active = variants.find((t) => t.active);
+      const activeId = active ? `${active.language}|${(active.audioRoles || []).join('/')}|${active.audioId ?? ''}` : null;
+      return tracks.length ? { tracks, activeId } : null;
+    }
+  } catch { /* motor inicializando */ }
+  return null;
+}
+
+/** Seleciona a faixa de áudio `id` (id no formato de getAudioTracks). */
+function setAudioTrack(id) {
+  const p = state.player;
+  if (!p) return;
+  try {
+    if (state.playerKind === 'hls') {
+      p.audioTrack = id;
+    } else if (state.playerKind === 'dash') {
+      const info = (getAudioTracks() || { tracks: [] }).tracks.find((t) => t.id === id);
+      if (info && info._track) p.setCurrentTrack(info._track);
+    } else if (state.playerKind === 'shaka') {
+      const info = (getAudioTracks() || { tracks: [] }).tracks.find((t) => t.id === id);
+      if (info) p.selectAudioLanguage(info._lang, info._roles && info._roles.length ? info._roles[0] : undefined);
+    }
+  } catch (e) {
+    logEvent('Não foi possível trocar a faixa de áudio: ' + e.message);
+    return;
+  }
+  const info = (getAudioTracks() || { tracks: [] }).tracks.find((t) => t.id === id);
+  logEvent(`Áudio → ${info ? info.label : 'faixa ' + id}.`);
+  renderTrackPickers();
+}
+
+/** Legendas/CC do motor ativo: { tracks:[{ id, label }], activeId, visible } ou null. */
+function getTextTracks() {
+  const p = state.player;
+  const video = $('#video');
+  try {
+    if (state.playerKind === 'hls' && p) {
+      const tracks = (p.subtitleTracks || []).map((s) => ({
+        id: 'h' + s.id, _hlsId: s.id,
+        label: [s.name, s.lang].filter(Boolean).join(' · ') || ('legenda ' + s.id),
+      }));
+      // captions in-band (CEA-608/708) que o hls.js expõe como texttrack nativo
+      // e não estão em subtitleTracks — cobre o "container"
+      const seenLabels = new Set(tracks.map((t) => t.label.toLowerCase()));
+      Array.from(video.textTracks || []).forEach((tt, i) => {
+        if (tt.kind !== 'captions' && tt.kind !== 'subtitles') return;
+        const label = (tt.label || tt.language || ('cc ' + i)).trim();
+        if (seenLabels.has(label.toLowerCase())) return;
+        tracks.push({ id: 'n' + i, _nativeIdx: i, label: label + (tt.kind === 'captions' ? ' (CC)' : '') });
+      });
+      const activeId = p.subtitleDisplay && p.subtitleTrack >= 0 ? 'h' + p.subtitleTrack : null;
+      return tracks.length ? { tracks, activeId, visible: !!p.subtitleDisplay } : null;
+    }
+    if (state.playerKind === 'dash' && p) {
+      const list = p.getTracksFor('text') || [];
+      const tracks = list.map((tr, i) => ({ id: i, label: [tr.lang, (tr.roles || []).join('/')].filter(Boolean).join(' · ') || ('legenda ' + i), _track: tr }));
+      let activeIdx = null, visible = false;
+      try { visible = p.isTextEnabled(); } catch { /* */ }
+      try { const c = p.getCurrentTextTrackIndex ? p.getCurrentTextTrackIndex() : null; if (c != null && c >= 0) activeIdx = c; } catch { /* */ }
+      return tracks.length ? { tracks, activeId: visible ? activeIdx : null, visible } : null;
+    }
+    if (state.playerKind === 'shaka' && p) {
+      const list = p.getTextTracks() || [];
+      const tracks = list.map((t) => ({ id: t.id, label: [t.language, (t.roles || []).join('/'), t.label].filter(Boolean).join(' · ') || ('legenda ' + t.id), _track: t }));
+      const visible = p.isTextTrackVisible();
+      const active = list.find((t) => t.active);
+      return tracks.length ? { tracks, activeId: visible && active ? active.id : null, visible } : null;
+    }
+    // progressivo ou nativo: usa video.textTracks direto
+    if (video && video.textTracks && video.textTracks.length) {
+      const tracks = Array.from(video.textTracks).map((tt, i) => ({
+        id: 'n' + i, _nativeIdx: i,
+        label: (tt.label || tt.language || ('faixa ' + i)) + (tt.kind === 'captions' ? ' (CC)' : ''),
+      }));
+      const activeIdx = Array.from(video.textTracks).findIndex((tt) => tt.mode === 'showing');
+      return { tracks, activeId: activeIdx >= 0 ? 'n' + activeIdx : null, visible: activeIdx >= 0 };
+    }
+  } catch { /* motor inicializando */ }
+  return null;
+}
+
+/** Seleciona a legenda `id`, ou desliga com id === -1. */
+function setTextTrack(id) {
+  const p = state.player;
+  const video = $('#video');
+  const off = id === -1;
+  try {
+    if (state.playerKind === 'hls' && p) {
+      if (off) { p.subtitleDisplay = false; p.subtitleTrack = -1; Array.from(video.textTracks || []).forEach((tt) => { tt.mode = 'disabled'; }); }
+      else if (typeof id === 'string' && id[0] === 'h') { p.subtitleDisplay = true; p.subtitleTrack = Number(id.slice(1)); }
+      else if (typeof id === 'string' && id[0] === 'n') {
+        // caption nativo (in-band): liga via video.textTracks
+        Array.from(video.textTracks).forEach((tt, i) => { tt.mode = i === Number(id.slice(1)) ? 'showing' : 'disabled'; });
+      }
+    } else if (state.playerKind === 'dash' && p) {
+      if (off) p.enableText(false);
+      else { p.enableText(true); p.setTextTrack(id); }
+    } else if (state.playerKind === 'shaka' && p) {
+      if (off) p.setTextTrackVisibility(false);
+      else {
+        const t = (p.getTextTracks() || []).find((x) => x.id === id);
+        if (t) p.selectTextTrack(t);
+        p.setTextTrackVisibility(true);
+      }
+    } else if (video && video.textTracks) {
+      Array.from(video.textTracks).forEach((tt, i) => { tt.mode = (!off && id === 'n' + i) ? 'showing' : 'disabled'; });
+    }
+  } catch (e) {
+    logEvent('Não foi possível trocar a legenda: ' + e.message);
+    return;
+  }
+  if (off) logEvent('Legendas desligadas.');
+  else {
+    const info = (getTextTracks() || { tracks: [] }).tracks.find((t) => t.id === id);
+    logEvent(`Legenda → ${info ? info.label : id}.`);
+  }
+  renderTrackPickers();
+}
+
+/** (Re)desenha os seletores de áudio e legendas a partir do motor ativo. */
+function renderTrackPickers() {
+  const audioPicker = $('#audio-picker'), audioBox = $('#audio-pills');
+  const subsPicker = $('#subs-picker'), subsBox = $('#subs-pills');
+  if (!audioPicker || !subsPicker) return;
+
+  if (state.playerKind === 'progressive') {
+    audioPicker.hidden = true; subsPicker.hidden = true; return;
+  }
+
+  // ---- Áudio: só mostra quando há mais de uma faixa ----
+  const au = getAudioTracks();
+  if (au && au.tracks.length > 1) {
+    audioPicker.hidden = false;
+    audioBox.innerHTML = '';
+    for (const tr of au.tracks) {
+      const pill = el('button', 'track-pill' + (tr.id === au.activeId ? ' forced' : ''), tr.label);
+      pill.type = 'button';
+      pill.addEventListener('click', () => setAudioTrack(tr.id));
+      audioBox.appendChild(pill);
+    }
+  } else {
+    audioPicker.hidden = true; audioBox.innerHTML = '';
+  }
+
+  // ---- Legendas/CC: "Desligado" + uma pill por faixa (só se houver alguma) ----
+  const tx = getTextTracks();
+  if (tx && tx.tracks.length) {
+    subsPicker.hidden = false;
+    subsBox.innerHTML = '';
+    const offPill = el('button', 'track-pill' + (!tx.visible ? ' forced' : ''), 'Desligado');
+    offPill.type = 'button';
+    offPill.addEventListener('click', () => setTextTrack(-1));
+    subsBox.appendChild(offPill);
+    for (const tr of tx.tracks) {
+      const pill = el('button', 'track-pill' + (tx.visible && tr.id === tx.activeId ? ' forced' : ''), tr.label);
+      pill.type = 'button';
+      pill.addEventListener('click', () => setTextTrack(tr.id));
+      subsBox.appendChild(pill);
+    }
+  } else {
+    subsPicker.hidden = true; subsBox.innerHTML = '';
+  }
+}
+
 function startPlayback(type, url, model, isLive) {
   const video = $('#video');
   state.drmBlocked = false;
   state.forcedLevel = -1; // toda nova sessão de playback começa em ABR automático
   $('#ladder-picker').hidden = true;
   $('#ladder-pills').innerHTML = '';
+  $('#audio-picker').hidden = true; $('#audio-pills').innerHTML = '';
+  $('#subs-picker').hidden = true; $('#subs-pills').innerHTML = '';
   $('#color-note-runtime').textContent = '';
   $('#chroma-method-note').textContent = '';
   state.lastPlay = { type, url, model, isLive };
@@ -1298,7 +1502,9 @@ function startPlayback(type, url, model, isLive) {
       state.playerKind = 'hls';
       hls.loadSource(url);
       hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => renderLadderPills());
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { renderLadderPills(); renderTrackPickers(); });
+      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => renderTrackPickers());
+      hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => renderTrackPickers());
       hls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
         const lv = hls.levels[d.level];
         if (lv) {
@@ -1322,7 +1528,8 @@ function startPlayback(type, url, model, isLive) {
       player.updateSettings({ streaming: { cmcd: { enabled: true, sid: cmcdSessionId(), cid: cmcdContentId() } } });
     } catch { /* versão sem suporte a CMCD */ }
     player.initialize(video, url, true);
-    player.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => renderLadderPills());
+    player.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => { renderLadderPills(); renderTrackPickers(); });
+    try { player.on(dashjs.MediaPlayer.events.TEXT_TRACKS_ADDED, () => renderTrackPickers()); } catch { /* evento pode não existir nesta versão */ }
     player.on(dashjs.MediaPlayer.events.QUALITY_CHANGE_RENDERED, (e) => {
       if (e.mediaType !== 'video') return;
       try {
@@ -1374,6 +1581,8 @@ async function startShakaPlayback(video, url, model, isLive) {
     }
   });
   player.addEventListener('buffering', (e) => { if (e.buffering) logEvent('Rebuffering (buffering)…'); });
+  player.addEventListener('trackschanged', () => renderTrackPickers());
+  player.addEventListener('texttrackvisibility', () => renderTrackPickers());
 
   try {
     await player.load(url);
@@ -1382,6 +1591,7 @@ async function startShakaPlayback(video, url, model, isLive) {
     return;
   }
   renderLadderPills();
+  renderTrackPickers();
 
   video.muted = true;
   video.play().catch(() => logEvent('Autoplay bloqueado — clique no player para iniciar.'));

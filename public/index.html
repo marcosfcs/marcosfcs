@@ -194,10 +194,20 @@
             <span id="throttle-state" class="badge badge-info">Sem limite</span>
             <label><input type="checkbox" id="force-proxy" /> Reproduzir via proxy</label>
           </div>
-          <div class="ladder-picker" id="ladder-picker" hidden
+          <div class="track-picker ladder-picker" id="ladder-picker" hidden
                title="Trava o player numa variante específica (desliga o ABR automático do motor). Clique em 'Auto' para devolver o controle ao ABR.">
             <span class="engine-picker-label">Qualidade (ladder):</span>
-            <div id="ladder-pills" class="ladder-pills"></div>
+            <div id="ladder-pills" class="track-pills ladder-pills"></div>
+          </div>
+          <div class="track-picker" id="audio-picker" hidden
+               title="Troca a faixa de áudio (idioma / mixagem) que o player está reproduzindo.">
+            <span class="engine-picker-label">Áudio:</span>
+            <div id="audio-pills" class="track-pills"></div>
+          </div>
+          <div class="track-picker" id="subs-picker" hidden
+               title="Liga/desliga e escolhe a faixa de legenda ou closed caption renderizada sobre o vídeo.">
+            <span class="engine-picker-label">Legendas / CC:</span>
+            <div id="subs-pills" class="track-pills"></div>
           </div>
           <video id="video" controls muted playsinline></video>
           <div class="tiles">
