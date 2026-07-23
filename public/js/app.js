@@ -54,6 +54,7 @@ const state = {
   colorSpaceProbe: null,
   cdnHeaders: {},      // header -> valor (última amostra vista)
   lufsIntegrated: null,
+  truePeak: null,      // máximo entre truePeakL/truePeakR (dBTP)
 
   // análise de qualidade PSNR/SSIM
   qualityCompare: null,
@@ -586,6 +587,7 @@ function setupTelemetryCharts(isLive) {
   state.cdnHeaders = {};
   state._netBreakdownRows = [];
   state.lufsIntegrated = null;
+  state.truePeak = null;
 
   // rede
   state.charts.ttfb = new LineChart($('#chart-ttfb'), {
@@ -614,12 +616,17 @@ function updateTiles(t) {
   $('#tile-state').textContent = states;
 }
 
+// Tolerância de ±2 dB em torno do alvo integrado é definida pela própria
+// norma (ABNT NBR 15602 / ATSC A/85) — não é configurável pelo usuário.
+const LUFS_TOLERANCE_DB = 2;
+
 function readThresholds() {
   return {
     silenceDbfs: Number($('#th-silence').value) || -50,
     freezeSec: Number($('#th-freeze').value) || 5,
     bufferSec: Number($('#th-buffer').value) || 2,
-    lufsMax: Number($('#th-lufs').value) || -23,
+    lufsTarget: Number($('#th-lufs').value) || -24,
+    truePeakMax: Number($('#th-truepeak').value) || -2,
   };
 }
 
@@ -711,12 +718,22 @@ function setupAlertEngine(model, isLive) {
     },
   });
   engine.register('loudness', {
-    label: 'Loudness (Integrated) acima do limite de compliance',
+    label: 'Loudness (Integrated) fora da faixa de compliance ABNT NBR 15602 (±2 dB do alvo)',
     severity: 'warning',
     sustainSec: 5,
     test: (c) => {
       if (!playing() || c.lufsIntegrated == null) return null;
-      return c.lufsIntegrated > th().lufsMax;
+      const target = th().lufsTarget;
+      return c.lufsIntegrated > target + LUFS_TOLERANCE_DB || c.lufsIntegrated < target - LUFS_TOLERANCE_DB;
+    },
+  });
+  engine.register('truePeak', {
+    label: 'True Peak acima do limite de compliance ABNT NBR 15602',
+    severity: 'warning',
+    sustainSec: 5,
+    test: (c) => {
+      if (!playing() || c.truePeak == null) return null;
+      return c.truePeak > th().truePeakMax;
     },
   });
   if (isLive) {
@@ -894,6 +911,8 @@ function startTelemetry(model, isLive) {
       if (state.charts.spectrum) {
         state.charts.spectrum.setSeriesData('s', Array.from(state.lastAudio.spectrum, (v, i) => [i, v]));
       }
+      state.truePeak = Math.max(state.lastAudio.truePeakL, state.lastAudio.truePeakR);
+      $('#tile-truepeak').textContent = state.truePeak.toFixed(1).replace('.', ',') + ' dBTP';
       const lu = state.lastAudio.lufs;
       if (lu) {
         state.charts.lufs && state.charts.lufs.push(t, { m: lu.momentary, s: lu.shortTerm, i: lu.integrated });
@@ -944,6 +963,7 @@ function startTelemetry(model, isLive) {
         nominalFps: state.qoe ? state.qoe.nominalFps : null,
         manifestAgeSec: state.netmon && isLive ? state.netmon.manifestAgeSec() : null,
         lufsIntegrated: state.lufsIntegrated,
+        truePeak: state.truePeak,
       });
     }
 

@@ -2,9 +2,14 @@
  * Medição de áudio em tempo real via Web Audio API.
  *
  * Grafo: MediaElementAudioSourceNode → ChannelSplitter → 2× AnalyserNode
- * (L/R) → Gain(0) → destination. O ganho zero mantém o monitoramento
- * silencioso sem usar video.muted — importante porque muted silencia a
- * ENTRADA do source node e os medidores leriam só zeros.
+ * (L/R) → Gain(1) → destination. createMediaElementSource() desvia
+ * PERMANENTEMENTE a saída de áudio do <video> para o grafo do Web Audio —
+ * a partir daí, o elemento só é ouvido através do que estiver conectado a
+ * destination. Por isso o ganho precisa ser 1 (não 0): é o único caminho
+ * que leva o áudio real de volta aos alto-falantes, e não afeta o ramo de
+ * medição (splitter → analysers), que é independente. video.muted não é
+ * usado para controlar isso porque muted silencia a ENTRADA do source
+ * node e os medidores leriam só zeros.
  *
  * Métricas por leitura (sample()):
  *   - RMS e pico por canal, em dBFS (VU meter — resposta rápida, não é LUFS)
@@ -16,6 +21,11 @@
  *     coeficientes calculados para 48kHz (não recalculados por sample
  *     rate) e hop de bloco ~150ms (a norma usa 100ms) — suficiente para
  *     monitoração, mas não certificação.
+ *   - True Peak por canal (dBTP), aproximado por sobreamostragem 4x
+ *     (interpolação linear simples sobre o buffer de tempo) em vez do
+ *     filtro FIR polyphase exato do Anexo 2 da BS.1770 — suficiente para
+ *     detectar estouro de intersample peak na prática, não para
+ *     certificação formal.
  *
  * Limitações detectadas e reportadas:
  *   - origem sem CORS → o navegador entrega silêncio permanente (tainted);
@@ -55,7 +65,7 @@ class AudioMeter {
       this.analyserL.fftSize = 2048;
       this.analyserR.fftSize = 2048;
       this.gain = this.ctx.createGain();
-      this.gain.gain.value = 0;
+      this.gain.gain.value = 1;
 
       this.source.connect(this.splitter);
       this.splitter.connect(this.analyserL, 0);
@@ -67,7 +77,7 @@ class AudioMeter {
       this._timeR = new Float32Array(this.analyserR.fftSize);
       this._freq = new Uint8Array(this.analyserL.frequencyBinCount);
 
-      // silêncio garantido pelo gain=0; libera o elemento para alimentar o grafo
+      // gain=1 leva o áudio real ao destino; libera o elemento para alimentar o grafo
       video.muted = false;
       video.volume = 1;
 
@@ -200,6 +210,7 @@ class AudioMeter {
     return {
       dbfsL: toDbfs(L.rms), dbfsR: toDbfs(R.rms),
       peakL: toDbfs(L.peak), peakR: toDbfs(R.peak),
+      truePeakL: toDbfs(truePeakAbs(this._timeL)), truePeakR: toDbfs(truePeakAbs(this._timeR)),
       spectrum, binHz: nyquist / this._freq.length * group,
       contextState: this.ctx.state,
       taintedSuspect: this.taintedSuspect,
@@ -217,6 +228,24 @@ function channelStats(buf) {
     if (a > peak) peak = a;
   }
   return { rms: Math.sqrt(sum / buf.length), peak };
+}
+
+/** Pico verdadeiro (dBTP) aproximado: sobreamostragem 4x por interpolação
+ * linear entre amostras consecutivas, para pegar picos de intersample que o
+ * pico de amostra (channelStats().peak) não vê. Não é o FIR polyphase exato
+ * do Anexo 2 da BS.1770, mas é suficiente para detectar estouro na prática. */
+function truePeakAbs(buf) {
+  let peak = 0;
+  for (let i = 0; i < buf.length - 1; i++) {
+    const a = buf[i], b = buf[i + 1];
+    for (let k = 0; k < 4; k++) {
+      const v = Math.abs(a + (b - a) * (k / 4));
+      if (v > peak) peak = v;
+    }
+  }
+  const last = Math.abs(buf[buf.length - 1]);
+  if (last > peak) peak = last;
+  return peak;
 }
 
 function toDbfs(v) {

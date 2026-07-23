@@ -276,6 +276,7 @@
         <div class="tile"><span class="tile-label">LUFS Momentary</span><span class="tile-value" id="tile-lufs-m">—</span></div>
         <div class="tile"><span class="tile-label">LUFS Short-term</span><span class="tile-value" id="tile-lufs-s">—</span></div>
         <div class="tile"><span class="tile-label">LUFS Integrated</span><span class="tile-value" id="tile-lufs-i">—</span></div>
+        <div class="tile"><span class="tile-label">True Peak</span><span class="tile-value" id="tile-truepeak">—</span></div>
       </div>
       <p id="lufs-note" class="note"></p>
       <div class="two-col">
@@ -298,7 +299,8 @@
         <label>Silêncio abaixo de <input type="number" id="th-silence" value="-50" step="1" max="0" min="-60" /> dBFS</label>
         <label>Congelamento após <input type="number" id="th-freeze" value="5" step="1" min="2" max="60" /> s</label>
         <label>Buffer baixo &lt; <input type="number" id="th-buffer" value="2" step="0.5" min="0.5" max="30" /> s</label>
-        <label>Loudness acima de <input type="number" id="th-lufs" value="-23" step="1" min="-40" max="0" /> LUFS (Integrated)</label>
+        <label>Loudness fora de ±2 dB de <input type="number" id="th-lufs" value="-24" step="1" min="-40" max="0" /> LUFS Integrated (alvo ABNT NBR 15602)</label>
+        <label>True Peak acima de <input type="number" id="th-truepeak" value="-2" step="0.5" min="-9" max="0" /> dBTP (ABNT NBR 15602)</label>
       </div>
       <div id="alert-list"></div>
     </section>
