@@ -555,6 +555,8 @@ function setupTelemetryCharts(isLive) {
   });
   destroyChart('chroma');
   state.charts.chroma = new StreamChromaticity.ChromaticityChart($('#chart-chroma'), { height: 340 });
+  destroyChart('chroma3d');
+  state.charts.chroma3d = new StreamChromaticity.Chromaticity3DChart($('#chart-chroma-3d'), { height: 340 });
 
   // áudio
   state.charts.audioLevel = new LineChart($('#chart-audio-level'), {
@@ -998,16 +1000,19 @@ function startTelemetry(model, isLive) {
             });
             if (cs.pixelsSupported && cs.chromaPoints && cs.chromaPoints.length) {
               state.charts.chroma.setPoints(cs.chromaPoints);
+              state.charts.chroma3d.setPoints(cs.chromaPoints);
               $('#chroma-method-note').textContent =
                 'Amostragem via WebCodecs (VideoFrame bruto) — gamut real do conteúdo decodificado, sem tone-mapping de canvas.';
             } else {
               state.charts.chroma.setPoints(s.chromaPoints);
+              state.charts.chroma3d.setPoints(s.chromaPoints);
               $('#chroma-method-note').textContent =
                 'Amostragem via canvas 2D (aproximação) — formato de frame não suportado para leitura direta; limitada a Rec.709/SDR.';
             }
           }).catch(() => { /* frame indisponível nesse instante — mantém os pontos anteriores */ });
         } else {
           state.charts.chroma.setPoints(s.chromaPoints);
+          state.charts.chroma3d.setPoints(s.chromaPoints);
           $('#chroma-method-note').textContent =
             'Amostragem via canvas 2D (aproximação) — WebCodecs indisponível neste navegador; limitada a Rec.709/SDR.';
         }

@@ -212,7 +212,7 @@ async function samplePixelsFromFrame(frame, cs, count) {
       const sum = X + Yl + Z;
       if (sum < 1e-6) continue;
       points.push({
-        x: X / sum, y: Yl / sum,
+        x: X / sum, y: Yl / sum, Y: Math.min(1, Math.max(0, Yl)),
         r: linearToSrgb8(R), g: linearToSrgb8(G), b: linearToSrgb8(B),
       });
       if (points.length >= count) break;

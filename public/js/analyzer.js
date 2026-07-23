@@ -73,7 +73,7 @@ class ColorAnalyzer {
 
       if (rgbToXy && pixelIndex % chromaStride === 0) {
         const xy = rgbToXy(r, g, b);
-        if (xy) chromaPoints.push({ x: xy.x, y: xy.y, r, g, b });
+        if (xy) chromaPoints.push({ x: xy.x, y: xy.y, Y: Math.min(1, Math.max(0, xy.Y)), r, g, b });
       }
       const px = pixelIndex % w, py = (pixelIndex / w) | 0;
       const ti = Math.min(TH - 1, (py * TH / h) | 0) * TW + Math.min(TW - 1, (px * TW / w) | 0);

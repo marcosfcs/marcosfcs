@@ -310,4 +310,258 @@ class ChromaticityChart {
   }
 }
 
-window.StreamChromaticity = { ChromaticityChart, rgb8ToXy };
+/* ================================================================ *
+ * Cromaticidade 3D (CIE xyY)
+ * ================================================================ */
+
+/**
+ * Mesmo dado do diagrama 2D, com o eixo de luminância (Y) adicionado.
+ * Sem lib/dependência nova — nenhum gráfico deste projeto usa uma, então
+ * trazer WebGL/Three.js só para este scatter+wireframe seria
+ * desproporcional. Projeção 3D→2D feita à mão: rotação órbita
+ * (yaw/pitch, arraste com o mouse) + projeção ortográfica simples,
+ * suficiente para orientação visual (não é um viewer CAD).
+ *
+ * Piso (Y=0) reaproveita exatamente as mesmas formas do diagrama 2D
+ * (lócus espectral + triângulos de gamut); a nuvem de pontos sobe no
+ * eixo Y conforme a luminância real de cada pixel amostrado, ordenada
+ * por profundidade (pintor's algorithm) para oclusão aproximada.
+ */
+class Chromaticity3DChart {
+  constructor(container, opts) {
+    this.container = container;
+    this.opts = Object.assign({ height: 340 }, opts);
+    this.domain = { xMin: 0, xMax: 0.8, yMin: 0, yMax: 0.9 };
+    this.points = [];
+    this.yaw = -0.6;
+    this.pitch = 0.45;
+
+    container.classList.add('chroma-box');
+    this.canvas = document.createElement('canvas');
+    this.canvas.className = 'chart-canvas';
+    this.canvas.style.height = this.opts.height + 'px';
+    this.canvas.style.cursor = 'grab';
+    this.canvas.style.touchAction = 'none';
+    container.appendChild(this.canvas);
+
+    const legend = document.createElement('div');
+    legend.className = 'chart-legend';
+    for (const g of GAMUTS) {
+      const item = document.createElement('span');
+      item.className = 'chart-legend-item';
+      const sw = document.createElement('span');
+      sw.className = 'chart-swatch';
+      sw.dataset.colorVar = g.colorVar;
+      item.appendChild(sw);
+      item.appendChild(document.createTextNode(g.label));
+      legend.appendChild(item);
+    }
+    const swPt = document.createElement('span');
+    swPt.className = 'chart-legend-item';
+    const dotSw = document.createElement('span');
+    dotSw.className = 'chart-swatch chroma-dot-swatch';
+    swPt.appendChild(dotSw);
+    swPt.appendChild(document.createTextNode('Pixels do frame atual (cor real) — altura = luminância'));
+    legend.appendChild(swPt);
+    container.appendChild(legend);
+    this.legend = legend;
+
+    const tiles = document.createElement('div');
+    tiles.className = 'tiles chroma-tiles';
+    this.tileEls = {};
+    for (const g of GAMUTS) {
+      const tile = document.createElement('div');
+      tile.className = 'tile';
+      const label = document.createElement('span');
+      label.className = 'tile-label';
+      label.textContent = 'Dentro de ' + g.label;
+      const value = document.createElement('span');
+      value.className = 'tile-value';
+      value.textContent = '—';
+      tile.append(label, value);
+      tiles.appendChild(tile);
+      this.tileEls[g.key] = value;
+    }
+    container.appendChild(tiles);
+
+    this.ctx = this.canvas.getContext('2d');
+    this._ro = new ResizeObserver(() => this.draw());
+    this._ro.observe(container);
+    this._mq = matchMedia('(prefers-color-scheme: dark)');
+    this._mqHandler = () => this.draw();
+    this._mq.addEventListener('change', this._mqHandler);
+
+    this._dragging = false;
+    this._onPointerDown = (e) => {
+      this._dragging = true;
+      this._lastX = e.clientX; this._lastY = e.clientY;
+      this.canvas.style.cursor = 'grabbing';
+      this.canvas.setPointerCapture(e.pointerId);
+    };
+    this._onPointerMove = (e) => {
+      if (!this._dragging) return;
+      const dx = e.clientX - this._lastX, dy = e.clientY - this._lastY;
+      this._lastX = e.clientX; this._lastY = e.clientY;
+      this.yaw += dx * 0.008;
+      this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch - dy * 0.008));
+      this.draw();
+    };
+    this._onPointerUp = (e) => {
+      this._dragging = false;
+      this.canvas.style.cursor = 'grab';
+      try { this.canvas.releasePointerCapture(e.pointerId); } catch { /* já liberado */ }
+    };
+    this.canvas.addEventListener('pointerdown', this._onPointerDown);
+    this.canvas.addEventListener('pointermove', this._onPointerMove);
+    this.canvas.addEventListener('pointerup', this._onPointerUp);
+    this.canvas.addEventListener('pointerleave', this._onPointerUp);
+
+    this.draw();
+  }
+
+  destroy() {
+    this._ro.disconnect();
+    this._mq.removeEventListener('change', this._mqHandler);
+    this.canvas.removeEventListener('pointerdown', this._onPointerDown);
+    this.canvas.removeEventListener('pointermove', this._onPointerMove);
+    this.canvas.removeEventListener('pointerup', this._onPointerUp);
+    this.canvas.removeEventListener('pointerleave', this._onPointerUp);
+    this.container.innerHTML = '';
+    this.container.classList.remove('chroma-box');
+  }
+
+  /** Substitui a nuvem de pontos (instantâneo — sem acumular), igual ao 2D. */
+  setPoints(points) {
+    this.points = points;
+    this._updateCoverage();
+    this.draw();
+  }
+
+  _updateCoverage() {
+    for (const g of GAMUTS) {
+      if (!this.points.length) { this.tileEls[g.key].textContent = '—'; continue; }
+      let inside = 0;
+      for (const p of this.points) if (pointInTriangle(p.x, p.y, g.primaries[0], g.primaries[1], g.primaries[2])) inside++;
+      this.tileEls[g.key].textContent = ((inside / this.points.length) * 100).toFixed(1).replace('.', ',') + '%';
+    }
+  }
+
+  /** Projeta xyY (x,y=cromaticidade; Y=luminância 0..1) → tela, com profundidade p/ ordenação. */
+  _project(x, y, Y, L) {
+    const D = this.domain;
+    const cx = (D.xMin + D.xMax) / 2, cz = (D.yMin + D.yMax) / 2;
+    const X3 = x - cx, Z3 = y - cz, Y3 = Y - 0.5;
+
+    const cosYaw = Math.cos(this.yaw), sinYaw = Math.sin(this.yaw);
+    const X1 = X3 * cosYaw - Z3 * sinYaw;
+    const Z1 = X3 * sinYaw + Z3 * cosYaw;
+
+    const cosPitch = Math.cos(this.pitch), sinPitch = Math.sin(this.pitch);
+    const Y2 = Y3 * cosPitch - Z1 * sinPitch;
+    const Z2 = Y3 * sinPitch + Z1 * cosPitch;
+
+    return { sx: L.cx + X1 * L.scale, sy: L.cy - Y2 * L.scale, depth: Z2 };
+  }
+
+  _layout() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.container.clientWidth;
+    const h = this.opts.height;
+    if (this.canvas.width !== Math.round(w * dpr) || this.canvas.height !== Math.round(h * dpr)) {
+      this.canvas.width = Math.round(w * dpr);
+      this.canvas.height = Math.round(h * dpr);
+      this.canvas.style.width = w + 'px';
+    }
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { w, h, cx: w / 2, cy: h / 2 + 20, scale: Math.min(w, h) * 0.62 };
+  }
+
+  draw() {
+    const L = this._layout();
+    const ctx = this.ctx;
+    const D = this.domain;
+    const grid = cssVar('--grid');
+    const axis = cssVar('--baseline');
+    const muted = cssVar('--text-muted');
+    const proj = (x, y, Y) => this._project(x, y, Y, L);
+
+    ctx.clearRect(0, 0, L.w, L.h);
+    ctx.font = '11px system-ui, -apple-system, "Segoe UI", sans-serif';
+
+    // piso: retângulo do domínio de cromaticidade em Y=0 (referência de orientação)
+    ctx.strokeStyle = grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    [[D.xMin, D.yMin], [D.xMax, D.yMin], [D.xMax, D.yMax], [D.xMin, D.yMax]].forEach(([x, y], i) => {
+      const p = proj(x, y, 0);
+      i === 0 ? ctx.moveTo(p.sx, p.sy) : ctx.lineTo(p.sx, p.sy);
+    });
+    ctx.closePath();
+    ctx.stroke();
+
+    // lócus espectral no piso (mesmo contorno do diagrama 2D)
+    ctx.strokeStyle = muted;
+    ctx.beginPath();
+    SPECTRAL_LOCUS.forEach(([, x, y], i) => {
+      const p = proj(x, y, 0);
+      i === 0 ? ctx.moveTo(p.sx, p.sy) : ctx.lineTo(p.sx, p.sy);
+    });
+    ctx.closePath();
+    ctx.stroke();
+
+    // triângulos de gamut no piso (Rec.709/P3/Rec.2020 — mesmos do 2D)
+    for (const g of GAMUTS) {
+      ctx.strokeStyle = cssVar(g.colorVar);
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      g.primaries.forEach(([x, y], i) => {
+        const p = proj(x, y, 0);
+        i === 0 ? ctx.moveTo(p.sx, p.sy) : ctx.lineTo(p.sx, p.sy);
+      });
+      ctx.closePath();
+      ctx.stroke();
+    }
+
+    // eixo vertical de luminância, no centro do piso, de Y=0 a Y=1
+    const cxDom = (D.xMin + D.xMax) / 2, cyDom = (D.yMin + D.yMax) / 2;
+    ctx.strokeStyle = axis;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    const axisBottom = proj(cxDom, cyDom, 0), axisTop = proj(cxDom, cyDom, 1);
+    ctx.moveTo(axisBottom.sx, axisBottom.sy);
+    ctx.lineTo(axisTop.sx, axisTop.sy);
+    ctx.stroke();
+    ctx.fillStyle = muted;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    for (const v of [0, 0.5, 1]) {
+      const p = proj(cxDom, cyDom, v);
+      ctx.fillText(v.toFixed(1), p.sx + 6, p.sy);
+    }
+    ctx.fillText('Y (luminância)', axisTop.sx + 6, axisTop.sy - 10);
+
+    // ponto branco D65 no piso
+    const wp = proj(D65[0], D65[1], 0);
+    ctx.fillStyle = muted;
+    ctx.beginPath(); ctx.arc(wp.sx, wp.sy, 3, 0, Math.PI * 2); ctx.fill();
+
+    // nuvem de pontos em xyY real, ordenada por profundidade (pintor's algorithm)
+    const projected = this.points
+      .map((p) => Object.assign(proj(p.x, p.y, p.Y == null ? 0 : p.Y), { r: p.r, g: p.g, b: p.b }))
+      .sort((a, b) => a.depth - b.depth);
+    for (const p of projected) {
+      ctx.fillStyle = `rgb(${p.r},${p.g},${p.b})`;
+      ctx.beginPath();
+      ctx.arc(p.sx, p.sy, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    if (this.legend) {
+      for (const sw of this.legend.querySelectorAll('.chart-swatch:not(.chroma-dot-swatch)')) {
+        sw.style.background = cssVar(sw.dataset.colorVar);
+      }
+    }
+  }
+}
+
+window.StreamChromaticity = { ChromaticityChart, Chromaticity3DChart, rgb8ToXy };
