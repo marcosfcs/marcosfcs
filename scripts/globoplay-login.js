@@ -5,24 +5,27 @@
  * O conteúdo ao vivo do Globoplay exige uma conta logada (gratuita ou
  * assinante). Este script abre um Chromium REAL E VISÍVEL, deixa você fazer
  * login manualmente como faria normalmente, e salva a sessão (cookies +
- * localStorage) em data/globoplay-session.json — o server.js reaproveita
- * esse arquivo depois, em modo headless, para resolver URLs do Globoplay
- * sem pedir login de novo (até a sessão expirar, aí é só rodar este script
- * de novo).
+ * localStorage) em ~/.stream-inspector/globoplay-session.json — o server.js
+ * reaproveita esse arquivo depois, em modo headless, para resolver URLs do
+ * Globoplay sem pedir login de novo (até a sessão expirar, aí é só rodar
+ * este script de novo). Fica FORA da pasta do repositório de propósito: um
+ * `git clone`/checkout novo nunca apaga essa sessão (mesmo caminho usado
+ * pelo server.js — ver DATA_DIR ali).
  *
  * Uso:
  *   node scripts/globoplay-login.js
  *
- * A sessão fica só na sua máquina (data/ está no .gitignore) — nunca é
- * enviada a lugar nenhum além do próprio Globoplay.
+ * A sessão fica só na sua máquina (fora do repo, nunca vai pro git) — nunca
+ * é enviada a lugar nenhum além do próprio Globoplay.
  */
 'use strict';
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const readline = require('readline');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_DIR = process.env.STREAM_INSPECTOR_DATA_DIR || path.join(os.homedir(), '.stream-inspector');
 const SESSION_PATH = path.join(DATA_DIR, 'globoplay-session.json');
 
 function waitForEnter(question) {

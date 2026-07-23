@@ -2141,7 +2141,7 @@ function saveHistoryEntry(url, model, adBreaks) {
 
 async function loadHistory() {
   try {
-    const res = await fetch('/api/history?limit=10');
+    const res = await fetch('/api/history?limit=50'); // painel tem scroll (.history-list), então mostra mais que os últimos 10
     if (!res.ok) { $('#sec-history').hidden = true; return; }
     const { items } = await res.json();
     renderHistoryList(items || []);

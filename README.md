@@ -79,9 +79,18 @@ O `server.js` é uma ferramenta local single-user e foi endurecido com isso em m
 - **Endpoints caros/de escrita** (`/resolve`, `/resolve-globoplay`, `/throttle`,
   `POST /api/history`) recusam requisições de origem externa explícita (defesa
   contra um site aberto no navegador acionar essas rotas).
-- **A sessão do Globoplay** (`data/globoplay-session.json`) contém cookies de
-  autenticação em texto puro; é gravada com modo `600`, fica fora do git e nunca é
-  servida como arquivo estático. Não compartilhe esse arquivo.
+- **A sessão do Globoplay** (`globoplay-session.json`, ver local abaixo) contém
+  cookies de autenticação em texto puro; é gravada com modo `600`, fica fora do git
+  e nunca é servida como arquivo estático. Não compartilhe esse arquivo.
+
+### Onde ficam os dados (histórico e sessão do Globoplay)
+
+Por padrão em `~/.stream-inspector/` (fora da pasta do repositório) — override via
+`STREAM_INSPECTOR_DATA_DIR=/algum/caminho node server.js`. É de propósito que essa
+pasta fique fora do clone: como ela guarda credenciais (sessão do Globoplay), nunca
+deve ir pro git, e uma pasta *dentro* do repositório seria apagada a cada
+`git clone`/checkout novo — ficando fora do repo, o histórico e o login do
+Globoplay sobrevivem a qualquer re-clone.
 
 ## YouTube (opcional)
 
@@ -146,7 +155,7 @@ mensagem clara em vez de tentar burlar. Conteúdo com DRM continua podendo ser
 ```
 server.js                 servidor estático + proxy de CORS (Node puro; Playwright é opcional,
                            só para /resolve-globoplay)
-scripts/globoplay-login.js login único do Globoplay (salva sessão em data/, fora do git)
+scripts/globoplay-login.js login único do Globoplay (salva sessão em ~/.stream-inspector/, fora do repo/git)
 public/
   index.html              UI (campo de URL + botão + seções de resultado)
   css/style.css           tokens de design (light/dark automático)

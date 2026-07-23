@@ -29,6 +29,7 @@ const tls = require('tls');
 const fs = require('fs');
 const path = require('path');
 const dns = require('dns');
+const os = require('os');
 const { execFile } = require('child_process');
 
 const PORT = Number(process.env.PORT) || 8787;
@@ -51,13 +52,17 @@ let throttleKbps = 0;
 
 /**
  * Histórico persistente de inspeções — SQLite via `node:sqlite` (módulo
- * nativo do Node 22+, sem dependência externa nova). Guardado em data/
- * (fora de public/, para não ser servido como arquivo estático) e ignorado
- * pelo git. Se node:sqlite não estiver disponível nesta versão do Node, o
- * histórico é desabilitado de forma explícita (mesmo padrão de honestidade
- * usado para yt-dlp/WebCodecs ausentes).
+ * nativo do Node 22+, sem dependência externa nova). Guardado FORA da pasta
+ * do repositório (por padrão em ~/.stream-inspector/, override via
+ * STREAM_INSPECTOR_DATA_DIR) — de propósito: se ficasse dentro do clone
+ * (ex.: <repo>/data/), um `git clone`/checkout novo sempre começaria com a
+ * pasta vazia, apagando o histórico e a sessão salva do Globoplay a cada
+ * clone. Também nunca é servido como arquivo estático (fora de public/) e
+ * fica fora do git de qualquer forma. Se node:sqlite não estiver disponível
+ * nesta versão do Node, o histórico é desabilitado de forma explícita
+ * (mesmo padrão de honestidade usado para yt-dlp/WebCodecs ausentes).
  */
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = process.env.STREAM_INSPECTOR_DATA_DIR || path.join(os.homedir(), '.stream-inspector');
 let historyDb = null;
 let historyError = null;
 try {
