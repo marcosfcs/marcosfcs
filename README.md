@@ -65,6 +65,35 @@ cabeçalhos CORS (`Access-Control-Allow-Origin`).
 (único recurso que usa uma dependência real, ver seção abaixo) — todo o resto do
 app roda sem ele.
 
+### Backend alternativo em Go
+
+Existe também uma reescrita do backend (`server.js`) em Go, com o mesmo comportamento
+observável: mesmas rotas, mesmos formatos de resposta, mesmas variáveis de ambiente.
+O frontend (`public/`) é o mesmo para as duas versões — ele é servido embedado no
+binário Go via `//go:embed` (`assets.go`), não precisa copiar a pasta separadamente.
+
+```bash
+go run ./cmd/server
+# → http://localhost:8787
+
+# ou, pra gerar um binário único:
+go build -o stream-inspector-server ./cmd/server
+./stream-inspector-server
+```
+
+- Histórico: `modernc.org/sqlite` (driver SQLite 100% Go, sem cgo) — mesmo schema e
+  mesmo `~/.stream-inspector/history.sqlite` (ou `STREAM_INSPECTOR_DATA_DIR`) do
+  server.js; não precisa migrar nada entre as duas versões.
+- Resolução do Globoplay usa `github.com/mxschmitt/playwright-go`, compatível com a
+  MESMA sessão salva (`globoplay-session.json`) do fluxo Node — o login só precisa
+  ser refeito se a sessão expirar, nunca por causa da troca de backend. Pra fazer
+  login pela primeira vez com esta versão: `go run ./cmd/globoplay-login`. O
+  `playwright-go` ainda depende de um passo de instalação único que roda um driver
+  Node por baixo pra baixar o Chromium (`go run github.com/mxschmitt/playwright-go/cmd/playwright install chromium`)
+  — o runtime das requisições fica 100% Go, só o setup inicial toca Node.
+- As duas versões (`server.js` e `go run ./cmd/server`) podem conviver no mesmo
+  checkout — nenhuma delas apaga ou depende de arquivos da outra.
+
 ### Segurança / rede
 
 O `server.js` é uma ferramenta local single-user e foi endurecido com isso em mente:
