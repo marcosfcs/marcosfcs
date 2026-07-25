@@ -744,13 +744,18 @@ function setupAlertEngine(model, isLive) {
       return c.timeAdvancing === false;
     },
   });
+  // Só dispara com tela preta E sem áudio ao mesmo tempo — tela preta com
+  // áudio tocando normalmente costuma ser conteúdo legítimo (fade/tela de
+  // abertura), não uma falha real de playback.
   engine.register('black', {
-    label: 'Tela preta',
+    label: 'Tela preta prolongada sem áudio',
     severity: 'critical',
-    sustainSec: 5,
+    sustainSec: 3,
     test: (c) => {
       if (!playing() || c.avgLuma == null) return null;
-      return c.avgLuma < 2;
+      if (c.avgLuma >= 2) return false; // tela não está preta
+      if (c.dbfsMax == null || c.audioTainted) return null; // preta, mas sem leitura confiável de áudio
+      return c.dbfsMax < th().silenceDbfs; // preta E sem áudio
     },
   });
   engine.register('silence', {
