@@ -114,12 +114,6 @@
     <div id="status" class="status" hidden></div>
   </div>
 
-  <section id="sec-history" class="wrap history-section" hidden>
-    <h2>Histórico de testes</h2>
-    <p id="history-note" class="note"></p>
-    <ul id="history-list" class="history-list"></ul>
-  </section>
-
   <!-- ══════════ cockpit: menu lateral + coluna de detalhe ══════════ -->
   <div class="app-shell" id="results" hidden>
 
@@ -135,6 +129,8 @@
       <button type="button" data-nav="audiovivo"><span class="nav-num">07</span> Áudio ao vivo</button>
       <button type="button" data-nav="cor"><span class="nav-num">08</span> Cor &amp; HDR</button>
       <button type="button" data-nav="qoe"><span class="nav-num">09</span> QoE</button>
+      <div class="nav-group">Sessões</div>
+      <button type="button" data-nav="historico"><span class="nav-num">10</span> Histórico de testes</button>
     </nav>
 
     <div class="detail-col">
@@ -148,10 +144,15 @@
 
         <div class="monitor-player">
           <div class="player-box">
-            <div class="engine-picker" role="radiogroup" aria-label="Motor de reprodução">
+            <div class="engine-picker">
               <span class="engine-picker-label">Motor de reprodução:</span>
-              <label><input type="radio" name="engine" value="hlsjs" checked /> HLS.js</label>
-              <label><input type="radio" name="engine" value="shaka" /> Shaka Player</label>
+              <select id="engine-select" class="track-select"
+                      title="HLS → hls.js por padrão; DASH → Shaka Player por padrão. As versões 'Globo' são as usadas em produção; 'mais recente' busca a última release de cada motor.">
+                <option value="hls-1.5.14">HLS.js 1.5.14 (Globo)</option>
+                <option value="hls-1.6.16">HLS.js 1.6.16 (mais recente)</option>
+                <option value="shaka-3.1.8">Shaka Player 3.1.8 (Globo)</option>
+                <option value="shaka-5.2.2">Shaka Player 5.2.2 (mais recente)</option>
+              </select>
             </div>
             <div class="net-test" title="Limita a velocidade com que o proxy local entrega os segmentos — observe no gráfico de bitrate como o ABR troca de perfil/ladder. O playback é redirecionado automaticamente para o proxy quando um limite é aplicado.">
               <span class="engine-picker-label">Teste de rede:</span>
@@ -163,21 +164,21 @@
               <label><input type="checkbox" id="force-proxy" /> Reproduzir via proxy</label>
             </div>
             <div class="track-picker ladder-picker" id="ladder-picker" hidden
-                 title="Trava o player numa variante específica (desliga o ABR automático do motor). Clique em 'Auto' para devolver o controle ao ABR.">
+                 title="Trava o player numa variante específica (desliga o ABR automático do motor). Escolha 'Auto' para devolver o controle ao ABR.">
               <span class="engine-picker-label">Qualidade (ladder):</span>
-              <div id="ladder-pills" class="track-pills ladder-pills"></div>
+              <select id="ladder-select" class="track-select"></select>
             </div>
             <div class="track-picker" id="audio-picker" hidden
                  title="Troca a faixa de áudio (idioma / mixagem) que o player está reproduzindo.">
               <span class="engine-picker-label">Áudio:</span>
-              <div id="audio-pills" class="track-pills"></div>
+              <select id="audio-select" class="track-select"></select>
             </div>
             <div class="track-picker" id="subs-picker" hidden
                  title="Liga/desliga e escolhe a faixa de legenda ou closed caption renderizada sobre o vídeo.">
               <span class="engine-picker-label">Legendas / CC:</span>
               <div id="subs-pills" class="track-pills"></div>
             </div>
-            <video id="video" controls muted playsinline></video>
+            <div id="clappr-mount" class="clappr-mount"></div>
             <div class="tiles">
               <div class="tile"><span class="tile-label">Estado</span><span class="tile-value" id="tile-state">—</span></div>
               <div class="tile"><span class="tile-label">Tempo</span><span class="tile-value" id="tile-time">—</span></div>
@@ -443,19 +444,32 @@
           </div>
         </div>
 
+        <div class="panel" data-panel="historico" hidden>
+          <h2>Histórico de testes</h2>
+          <p id="history-note" class="note"></p>
+          <ul id="history-list" class="history-list"></ul>
+        </div>
+
       </div>
     </div>
   </div>
 
   <footer class="wrap app-footer">
-    <p>Stream Inspector · playback via <a href="https://github.com/video-dev/hls.js" rel="noopener">hls.js</a> e
-      <a href="https://github.com/Dash-Industry-Forum/dash.js" rel="noopener">dash.js</a> ·
+    <p>Stream Inspector · playback via <a href="https://github.com/clappr/clappr-core" rel="noopener">Clappr</a>,
+      com <a href="https://github.com/video-dev/hls.js" rel="noopener">hls.js</a> e
+      <a href="https://github.com/shaka-project/shaka-player" rel="noopener">Shaka Player</a> como motores
+      (versão "Globo" e mais recente de cada, trocáveis no combo-box do player) ·
       manifests de origens sem CORS passam pelo proxy local <code>/p/</code> do <code>server.js</code>.</p>
   </footer>
 
-  <script src="vendor/hls.min.js"></script>
+  <!-- hls.js/Shaka NÃO são mais carregados aqui de forma estática: existem 2
+       versões de cada (ver ENGINE_BUNDLES em app.js) e só uma pode ocupar
+       window.Hls/window.shaka por vez — o combo-box de motor carrega a
+       escolhida sob demanda. dash.all.min.js continua estático: é usado só
+       pelo comparador de qualidade PSNR/SSIM (função independente do motor
+       principal), não pelo player do quadro de monitoração. -->
   <script src="vendor/dash.all.min.js"></script>
-  <script src="vendor/shaka-player.compiled.js"></script>
+  <script src="vendor/clappr/clappr-core.min.js"></script>
   <script src="js/parsers.js"></script>
   <script src="js/container.js"></script>
   <script src="js/charts.js"></script>
@@ -486,6 +500,9 @@
         // dispara resize para forçar o ResizeObserver dos gráficos recém-exibidos
         window.dispatchEvent(new Event('resize'));
       }
+      // exposto pra loadHistory() (app.js) poder abrir direto no painel de
+      // histórico quando a página carrega já com sessões salvas
+      window.selectCockpitPanel = select;
       nav.addEventListener('click', (e) => {
         const btn = e.target.closest('button[data-nav]');
         if (btn) select(btn.dataset.nav);

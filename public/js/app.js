@@ -16,9 +16,11 @@ const C = window.StreamContainer;
 
 const state = {
   charts: {},
-  player: null,        // instância Hls, dashjs MediaPlayer ou shaka.Player
-  playerKind: null,    // 'hls' | 'dash' | 'shaka'
-  engine: 'hlsjs',     // 'hlsjs' (hls.js + dash.js) | 'shaka' (Shaka Player p/ ambos)
+  player: null,        // instância Hls ou shaka.Player (a real, obtida via Clappr)
+  playerKind: null,    // 'hls' | 'shaka' | 'progressive'
+  engine: 'hls-1.5.14',      // chave de ENGINE_BUNDLES — motor+versão atual
+  engineManuallySet: false,  // true depois que o usuário troca no combo-box (não sobrescreve mais por tipo de manifest)
+  clapprPlayer: null,  // instância Clappr.Player que envelopa o <video> real
   timer: null,
   analyzer: null,
   t0: 0,
@@ -64,7 +66,88 @@ const state = {
   _qualityCleanupListeners: null,
 };
 
-if (window.shaka && shaka.polyfill && shaka.polyfill.installAll) shaka.polyfill.installAll();
+/* ================================================================ *
+ * Clappr + motores (hls.js/Shaka) sob demanda
+ *
+ * hls.js e Shaka são carregados dinamicamente (não mais via <script>
+ * estático) porque agora existem 2 versões de cada um lado a lado
+ * (a "da Globo", usada em produção, e a mais recente do GitHub) e só uma
+ * pode ocupar window.Hls/window.shaka por vez. Trocar de motor no
+ * combo-box troca esse global e reexecuta o plugin de playback do Clappr
+ * (hlsjs-playback/dash-shaka-playback), que capturam window.Hls/window.shaka
+ * no momento em que o próprio script deles roda — por isso a ordem de
+ * carregamento importa (engine primeiro, plugin depois).
+ * ================================================================ */
+
+const ENGINE_BUNDLES = {
+  'hls-1.5.14': { kind: 'hls', src: 'vendor/hls-1.5.14.min.js', label: 'HLS.js 1.5.14 (Globo)' },
+  'hls-1.6.16': { kind: 'hls', src: 'vendor/hls-1.6.16.min.js', label: 'HLS.js 1.6.16 (mais recente)' },
+  'shaka-3.1.8': { kind: 'shaka', src: 'vendor/shaka-3.1.8.compiled.js', label: 'Shaka Player 3.1.8 (Globo)' },
+  'shaka-5.2.2': { kind: 'shaka', src: 'vendor/shaka-5.2.2.compiled.js', label: 'Shaka Player 5.2.2 (mais recente)' },
+};
+
+function loadScriptOnce(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Falha ao carregar ' + src));
+    document.body.appendChild(s);
+  });
+}
+
+let _loadedEngineKey = null;
+
+/** Garante que window.Hls/window.shaka (versão pedida) e o respectivo
+ * plugin de playback do Clappr estejam carregados. Retorna 'hls'|'shaka'. */
+async function ensureEngineLoaded(key) {
+  const cfg = ENGINE_BUNDLES[key];
+  if (_loadedEngineKey === key) return cfg.kind;
+  await loadScriptOnce(cfg.src);
+  if (cfg.kind === 'hls') {
+    await loadScriptOnce('vendor/clappr/hlsjs-playback.external.min.js');
+  } else {
+    if (shaka.polyfill && shaka.polyfill.installAll) shaka.polyfill.installAll();
+    await loadScriptOnce('vendor/clappr/dash-shaka-playback.external.min.js');
+  }
+  _loadedEngineKey = key;
+  return cfg.kind;
+}
+
+/** window.Hls "cru" (fora do Clappr) usado só pela comparação de qualidade
+ * PSNR/SSIM (attachLockedVariant) — garante que exista mesmo se o motor
+ * principal escolhido for Shaka (nesse caso window.Hls nunca foi carregado). */
+async function ensureHlsGlobal() {
+  if (window.Hls) return;
+  await loadScriptOnce(ENGINE_BUNDLES['hls-1.5.14'].src);
+}
+
+/** O <video> real é criado pelo próprio Clappr (Core/Container/Playback),
+ * não existe mais um <video id="video"> estático no HTML — todo o resto do
+ * app (VU meter, WebCodecs, telemetria, alertas, QoE) lê o elemento por
+ * aqui em vez de document.querySelector('#video') direto. */
+function videoEl() {
+  const p = state.clapprPlayer;
+  return (p && p.core && p.core.activePlayback && p.core.activePlayback.el) || null;
+}
+
+/** Espera até `_hls`/`shakaPlayerInstance` (a instância real por baixo do
+ * plugin de playback do Clappr) ficar disponível — Clappr não expõe um
+ * evento síncrono e estável entre versões pra isso, então faz polling curto
+ * em vez de depender do nome exato de um evento interno. */
+function waitForEngineInstance(clapprPlayer, kind, timeoutMs) {
+  const timeout = timeoutMs || 8000;
+  return new Promise((resolve, reject) => {
+    const start = performance.now();
+    (function poll() {
+      const pb = clapprPlayer.core && clapprPlayer.core.activePlayback;
+      const instance = pb && (kind === 'hls' ? pb._hls : (pb.shakaPlayerInstance || pb._player));
+      if (instance) return resolve(instance);
+      if (performance.now() - start > timeout) return reject(new Error('Timeout esperando o motor de playback inicializar.'));
+      requestAnimationFrame(poll);
+    })();
+  });
+}
 
 /* ================================================================ *
  * Utilidades de rede
@@ -485,17 +568,15 @@ function stopPlayback() {
   state.lastFreezeDiff = null;
   state.lastAudio = null;
   state.lastColor = null;
-  if (state.player) {
-    try {
-      if (state.playerKind === 'hls') state.player.destroy();
-      else if (state.playerKind === 'shaka') { const p = state.player.destroy(); if (p && p.catch) p.catch(() => {}); }
-      else state.player.reset();
-    } catch { /* já destruído */ }
-    state.player = null;
+  // Clappr.destroy() já derruba o motor real por baixo (Playback.destroy()
+  // chama _hls.destroy()/shakaPlayerInstance.destroy()) e remove o <video>
+  // que ele mesmo criou — não precisa mais destruir state.player à parte.
+  if (state.clapprPlayer) {
+    try { state.clapprPlayer.destroy(); } catch { /* já destruído */ }
+    state.clapprPlayer = null;
   }
-  const video = $('#video');
-  video.removeAttribute('src');
-  video.load();
+  state.player = null;
+  state.playerKind = null;
 }
 
 function fmtClock(sec) {
@@ -554,7 +635,7 @@ function setupTelemetryCharts(isLive) {
     xMin: 0, xMax: 255, height: 220, yMin: 0,
   });
   destroyChart('chroma');
-  state.charts.chroma = new StreamChromaticity.ChromaticityChart($('#chart-chroma'), { height: 340 });
+  state.charts.chroma = new StreamChromaticity.ChromaticityChart($('#chart-chroma'), { height: 160 });
   destroyChart('chroma3d');
   state.charts.chroma3d = new StreamChromaticity.Chromaticity3DChart($('#chart-chroma-3d'), { height: 340 });
 
@@ -608,7 +689,7 @@ function setupTelemetryCharts(isLive) {
 }
 
 function updateTiles(t) {
-  const video = $('#video');
+  const video = videoEl();
   $('#tile-time').textContent = fmtClock(video.currentTime || 0);
   $('#tile-res').textContent = video.videoWidth ? `${video.videoWidth}×${video.videoHeight}` : '—';
   const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
@@ -633,7 +714,7 @@ function readThresholds() {
 }
 
 function setupAlertEngine(model, isLive) {
-  const video = $('#video');
+  const video = videoEl();
   const engine = new AlertEngine({
     listEl: $('#alert-list'),
     onLog: logEvent,
@@ -753,7 +834,7 @@ function setupAlertEngine(model, isLive) {
 }
 
 function startTelemetry(model, isLive) {
-  const video = $('#video');
+  const video = videoEl();
   state.analyzer = new ColorAnalyzer(video);
   // state.t0 é definido em setupTelemetryCharts() (só numa inspeção nova) e
   // propositalmente NÃO é resetado aqui — startTelemetry() também roda numa
@@ -855,15 +936,6 @@ function startTelemetry(model, isLive) {
       if (lv) level = lv.bitrate / 1e6;
       if (state.player.bandwidthEstimate) bw = state.player.bandwidthEstimate / 1e6;
       if (isLive) latency = state.player.latency;
-    } else if (state.playerKind === 'dash' && state.player) {
-      try {
-        const list = state.player.getBitrateInfoListFor('video');
-        const qi = state.player.getQualityFor('video');
-        if (list && list[qi]) level = list[qi].bitrate / 1e6;
-        const tp = state.player.getAverageThroughput('video');
-        if (tp) bw = tp / 1000;
-        if (isLive) latency = state.player.getCurrentLiveLatency();
-      } catch { /* player ainda inicializando */ }
     } else if (state.playerKind === 'shaka' && state.player) {
       try {
         const stats = state.player.getStats();
@@ -1157,14 +1229,6 @@ function getLadder() {
       if (!levels.length) return null;
       return { levels, activeIndex: p.currentLevel, auto: p.autoLevelEnabled };
     }
-    if (state.playerKind === 'dash') {
-      const list = p.getBitrateInfoListFor('video') || [];
-      if (!list.length) return null;
-      const levels = list.map((b, i) => ({ i: b.qualityIndex != null ? b.qualityIndex : i, width: b.width, height: b.height, bitrate: b.bitrate }));
-      let auto = true;
-      try { auto = p.getSettings().streaming.abr.autoSwitchBitrate.video !== false; } catch { /* default */ }
-      return { levels, activeIndex: auto ? -1 : p.getQualityFor('video'), auto };
-    }
     if (state.playerKind === 'shaka') {
       const tracks = p.getVariantTracks().filter((t) => t.type === 'variant');
       // agrupa por resolução/bitrate de vídeo (uma pill por variante de vídeo)
@@ -1192,13 +1256,6 @@ function setLadder(idx) {
   try {
     if (state.playerKind === 'hls') {
       p.currentLevel = idx; // -1 reativa o ABR do hls.js
-    } else if (state.playerKind === 'dash') {
-      if (idx === -1) {
-        p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: true } } } });
-      } else {
-        p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: false } } } });
-        p.setQualityFor('video', idx);
-      }
     } else if (state.playerKind === 'shaka') {
       if (idx === -1) {
         p.configure({ abr: { enabled: true } });
@@ -1222,11 +1279,11 @@ function setLadder(idx) {
   renderLadderPills();
 }
 
-/** (Re)desenha as pills do ladder a partir do motor ativo. */
+/** (Re)desenha o combo-box do ladder a partir do motor ativo. */
 function renderLadderPills() {
   const picker = $('#ladder-picker');
-  const box = $('#ladder-pills');
-  if (!picker || !box) return;
+  const select = $('#ladder-select');
+  if (!picker || !select) return;
 
   // progressivo (YouTube VOD) ou motor sem níveis: esconde o seletor
   if (state.playerKind === 'progressive') { picker.hidden = true; return; }
@@ -1234,48 +1291,51 @@ function renderLadderPills() {
   if (!lad) { picker.hidden = true; return; }
   picker.hidden = false;
 
-  const forced = state.forcedLevel != null && state.forcedLevel !== -1;
-  box.innerHTML = '';
-
-  // pill "Auto (ABR)"
-  const auto = el('button', 'track-pill' + (lad.auto ? ' forced' : ''), 'Auto (ABR)');
-  auto.type = 'button';
-  auto.addEventListener('click', () => setLadder(-1));
-  box.appendChild(auto);
-
-  // pills por variante, do maior p/ o menor bitrate
+  select.innerHTML = '';
   const ordered = lad.levels.slice().sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+
+  const autoOpt = document.createElement('option');
+  autoOpt.value = '-1';
+  autoOpt.textContent = ladderAutoLabel(lad, ordered);
+  select.appendChild(autoOpt);
+
   for (const lv of ordered) {
-    const label = `${lv.height ? lv.height + 'p' : (lv.width || '?')} · ${P.fmtBits(lv.bitrate)}`;
-    const cls = 'track-pill' +
-      (forced && lv.i === state.forcedLevel ? ' forced' : '') +
-      (!forced && lad.activeIndex === lv.i ? ' active' : ''); // em auto, marca o nível que o ABR toca
-    const pill = el('button', cls, label);
-    pill.type = 'button';
-    pill.title = `${lv.width || '?'}×${lv.height || '?'} @ ${P.fmtBits(lv.bitrate)}`;
-    pill.addEventListener('click', () => setLadder(lv.i));
-    box.appendChild(pill);
+    const opt = document.createElement('option');
+    opt.value = String(lv.i);
+    opt.textContent = `${lv.height ? lv.height + 'p' : (lv.width || '?')} · ${P.fmtBits(lv.bitrate)}`;
+    opt.title = `${lv.width || '?'}×${lv.height || '?'} @ ${P.fmtBits(lv.bitrate)}`;
+    select.appendChild(opt);
   }
+
+  const forced = state.forcedLevel != null && state.forcedLevel !== -1;
+  select.value = forced ? String(state.forcedLevel) : '-1';
+  select.onchange = () => setLadder(Number(select.value));
 }
 
-/** Atualiza só a marcação active/forced sem reconstruir (chamado no tick). */
+/** Rótulo da option "Auto" — inclui o nível que o ABR está tocando agora,
+ * já que um <select> só marca UMA option "selecionada" por vez (as pills
+ * conseguiam mostrar "Auto" + o nível ativo simultaneamente via 2 classes). */
+function ladderAutoLabel(lad, ordered) {
+  if (lad.auto && lad.activeIndex != null && lad.activeIndex !== -1) {
+    const active = ordered.find((lv) => lv.i === lad.activeIndex);
+    if (active) {
+      return `Auto (ABR) — atual: ${active.height ? active.height + 'p' : (active.width || '?')} · ${P.fmtBits(active.bitrate)}`;
+    }
+  }
+  return 'Auto (ABR)';
+}
+
+/** Atualiza só a option "Auto" e o valor selecionado, sem reconstruir (chamado no tick). */
 function refreshLadderActive() {
-  const box = $('#ladder-pills');
-  if (!box || $('#ladder-picker').hidden) return;
+  const select = $('#ladder-select');
+  if (!select || $('#ladder-picker').hidden) return;
   const lad = getLadder();
   if (!lad) return;
-  const forced = state.forcedLevel != null && state.forcedLevel !== -1;
-  const pills = box.querySelectorAll('.track-pill');
-  // pills[0] = Auto; as demais seguem a ordem de renderLadderPills (por bitrate desc)
   const ordered = lad.levels.slice().sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-  pills.forEach((pill, idx) => {
-    pill.classList.remove('active', 'forced');
-    if (idx === 0) { if (lad.auto) pill.classList.add('forced'); return; }
-    const lv = ordered[idx - 1];
-    if (!lv) return;
-    if (forced && lv.i === state.forcedLevel) pill.classList.add('forced');
-    else if (!forced && lad.activeIndex === lv.i) pill.classList.add('active');
-  });
+  if (select.options.length) select.options[0].textContent = ladderAutoLabel(lad, ordered);
+  const forced = state.forcedLevel != null && state.forcedLevel !== -1;
+  const wantValue = forced ? String(state.forcedLevel) : '-1';
+  if (select.value !== wantValue) select.value = wantValue;
 }
 
 /* ================================================================ *
@@ -1292,17 +1352,6 @@ function getAudioTracks() {
         id: a.id, label: [a.name, a.lang, a.channels ? a.channels + 'ch' : null].filter(Boolean).join(' · ') || ('faixa ' + a.id),
       }));
       return tracks.length ? { tracks, activeId: p.audioTrack } : null;
-    }
-    if (state.playerKind === 'dash') {
-      const list = p.getTracksFor('audio') || [];
-      const tracks = list.map((tr, i) => ({
-        id: tr.index != null ? tr.index : i,
-        label: [tr.lang, (tr.roles || []).join('/'), tr.channelsCount ? tr.channelsCount + 'ch' : null].filter(Boolean).join(' · ') || ('faixa ' + i),
-        _track: tr,
-      }));
-      let cur = null;
-      try { const c = p.getCurrentTrackFor('audio'); cur = c ? (c.index != null ? c.index : null) : null; } catch { /* */ }
-      return tracks.length ? { tracks, activeId: cur } : null;
     }
     if (state.playerKind === 'shaka') {
       const variants = p.getVariantTracks();
@@ -1331,9 +1380,6 @@ function setAudioTrack(id) {
   try {
     if (state.playerKind === 'hls') {
       p.audioTrack = id;
-    } else if (state.playerKind === 'dash') {
-      const info = (getAudioTracks() || { tracks: [] }).tracks.find((t) => t.id === id);
-      if (info && info._track) p.setCurrentTrack(info._track);
     } else if (state.playerKind === 'shaka') {
       const info = (getAudioTracks() || { tracks: [] }).tracks.find((t) => t.id === id);
       if (info) p.selectAudioLanguage(info._lang, info._roles && info._roles.length ? info._roles[0] : undefined);
@@ -1350,7 +1396,7 @@ function setAudioTrack(id) {
 /** Legendas/CC do motor ativo: { tracks:[{ id, label }], activeId, visible } ou null. */
 function getTextTracks() {
   const p = state.player;
-  const video = $('#video');
+  const video = videoEl();
   try {
     if (state.playerKind === 'hls' && p) {
       const tracks = (p.subtitleTracks || []).map((s) => ({
@@ -1368,14 +1414,6 @@ function getTextTracks() {
       });
       const activeId = p.subtitleDisplay && p.subtitleTrack >= 0 ? 'h' + p.subtitleTrack : null;
       return tracks.length ? { tracks, activeId, visible: !!p.subtitleDisplay } : null;
-    }
-    if (state.playerKind === 'dash' && p) {
-      const list = p.getTracksFor('text') || [];
-      const tracks = list.map((tr, i) => ({ id: i, label: [tr.lang, (tr.roles || []).join('/')].filter(Boolean).join(' · ') || ('legenda ' + i), _track: tr }));
-      let activeIdx = null, visible = false;
-      try { visible = p.isTextEnabled(); } catch { /* */ }
-      try { const c = p.getCurrentTextTrackIndex ? p.getCurrentTextTrackIndex() : null; if (c != null && c >= 0) activeIdx = c; } catch { /* */ }
-      return tracks.length ? { tracks, activeId: visible ? activeIdx : null, visible } : null;
     }
     if (state.playerKind === 'shaka' && p) {
       const list = p.getTextTracks() || [];
@@ -1400,7 +1438,7 @@ function getTextTracks() {
 /** Seleciona a legenda `id`, ou desliga com id === -1. */
 function setTextTrack(id) {
   const p = state.player;
-  const video = $('#video');
+  const video = videoEl();
   const off = id === -1;
   try {
     if (state.playerKind === 'hls' && p) {
@@ -1410,9 +1448,6 @@ function setTextTrack(id) {
         // caption nativo (in-band): liga via video.textTracks
         Array.from(video.textTracks).forEach((tt, i) => { tt.mode = i === Number(id.slice(1)) ? 'showing' : 'disabled'; });
       }
-    } else if (state.playerKind === 'dash' && p) {
-      if (off) p.enableText(false);
-      else { p.enableText(true); p.setTextTrack(id); }
     } else if (state.playerKind === 'shaka' && p) {
       if (off) p.setTextTrackVisibility(false);
       else {
@@ -1437,7 +1472,7 @@ function setTextTrack(id) {
 
 /** (Re)desenha os seletores de áudio e legendas a partir do motor ativo. */
 function renderTrackPickers() {
-  const audioPicker = $('#audio-picker'), audioBox = $('#audio-pills');
+  const audioPicker = $('#audio-picker'), audioSelect = $('#audio-select');
   const subsPicker = $('#subs-picker'), subsBox = $('#subs-pills');
   if (!audioPicker || !subsPicker) return;
 
@@ -1449,15 +1484,22 @@ function renderTrackPickers() {
   const au = getAudioTracks();
   if (au && au.tracks.length > 1) {
     audioPicker.hidden = false;
-    audioBox.innerHTML = '';
+    audioSelect.innerHTML = '';
     for (const tr of au.tracks) {
-      const pill = el('button', 'track-pill' + (tr.id === au.activeId ? ' forced' : ''), tr.label);
-      pill.type = 'button';
-      pill.addEventListener('click', () => setAudioTrack(tr.id));
-      audioBox.appendChild(pill);
+      const opt = document.createElement('option');
+      opt.value = String(tr.id);
+      opt.textContent = tr.label;
+      audioSelect.appendChild(opt);
     }
+    audioSelect.value = String(au.activeId);
+    audioSelect.onchange = () => {
+      // ids não-numéricos (Shaka usa uma chave composta lang|roles|audioId)
+      // — devolve o id original correspondente em vez de forçar Number().
+      const match = au.tracks.find((tr) => String(tr.id) === audioSelect.value);
+      setAudioTrack(match ? match.id : audioSelect.value);
+    };
   } else {
-    audioPicker.hidden = true; audioBox.innerHTML = '';
+    audioPicker.hidden = true; audioSelect.innerHTML = '';
   }
 
   // ---- Legendas/CC: "Desligado" + uma pill por faixa (só se houver alguma) ----
@@ -1480,143 +1522,135 @@ function renderTrackPickers() {
   }
 }
 
-function startPlayback(type, url, model, isLive) {
-  const video = $('#video');
+/**
+ * Monta o Clappr (envelopa tudo — controles, UI, tela de erro — exceto o
+ * playback em si) com o motor/versão escolhido no combo-box. HLS usa
+ * @clappr/hlsjs-playback (window.HlsjsPlayback); DASH usa dash-shaka-playback
+ * (window.DashShakaPlayback), ambos "external" (leem window.Hls/window.shaka
+ * já carregados — ver ensureEngineLoaded). Progressivo (YouTube VOD, arquivo
+ * único) usa o HTML5Video padrão do próprio Clappr, sem plugin extra.
+ *
+ * Depois que o Clappr sobe, `waitForEngineInstance` pega a instância REAL de
+ * Hls/shaka.Player por baixo do plugin (`_hls`/`shakaPlayerInstance`) e todo
+ * o resto do arquivo (getLadder/setLadder/getAudioTracks/etc., telemetria)
+ * continua falando com ela do jeito de sempre — só quem a criou mudou.
+ */
+async function startPlayback(type, url, model, isLive) {
   state.drmBlocked = false;
   state.forcedLevel = -1; // toda nova sessão de playback começa em ABR automático
-  $('#ladder-picker').hidden = true;
-  $('#ladder-pills').innerHTML = '';
-  $('#audio-picker').hidden = true; $('#audio-pills').innerHTML = '';
+  $('#ladder-picker').hidden = true; $('#ladder-select').innerHTML = '';
+  $('#audio-picker').hidden = true; $('#audio-select').innerHTML = '';
   $('#subs-picker').hidden = true; $('#subs-pills').innerHTML = '';
   $('#color-note-runtime').textContent = '';
   $('#chroma-method-note').textContent = '';
   state.lastPlay = { type, url, model, isLive };
 
-  // Progressivo (YouTube VOD): arquivo único tocado direto pelo <video>,
-  // sem hls.js/dash.js/shaka. Telemetria/cor/áudio/QoE/alertas seguem;
-  // só não há eventos de ABR (formato fixo).
+  // Default do motor por tipo de manifest (HLS→hls.js Globo, DASH→Shaka
+  // Globo) — só na primeira vez; depois que o usuário troca manualmente no
+  // combo-box (state.engineManuallySet), essa escolha é respeitada mesmo
+  // trocando de URL/tipo.
+  if (type !== 'progressive' && !state.engineManuallySet) {
+    state.engine = type === 'hls' ? 'hls-1.5.14' : 'shaka-3.1.8';
+    $('#engine-select').value = state.engine;
+  }
+
+  if (state.clapprPlayer) { try { state.clapprPlayer.destroy(); } catch { /* já destruído */ } state.clapprPlayer = null; }
+
+  const clapprOpts = {
+    source: url,
+    parentId: '#clappr-mount',
+    autoPlay: true,
+    mute: true,
+    width: '100%',
+    height: '100%',
+  };
+
+  let kind = 'progressive';
+  if (type !== 'progressive') {
+    try {
+      kind = await ensureEngineLoaded(state.engine);
+    } catch (e) {
+      logEvent('Falha ao carregar o motor de playback: ' + e.message);
+      return;
+    }
+    if (kind === 'hls') {
+      clapprOpts.plugins = { playback: [window.HlsjsPlayback] };
+      clapprOpts.playback = { hlsjsConfig: {
+        enableWorker: true, capLevelToPlayerSize: false,
+        cmcd: { sessionId: cmcdSessionId(), contentId: cmcdContentId() },
+      } };
+    } else {
+      clapprOpts.plugins = { playback: [window.DashShakaPlayback] };
+      clapprOpts.playback = { shakaConfiguration: {
+        cmcd: { enabled: true, sessionId: cmcdSessionId(), contentId: cmcdContentId() },
+      } };
+    }
+  }
+
+  const clapprPlayer = new Clappr.Player(clapprOpts);
+  state.clapprPlayer = clapprPlayer;
+
   if (type === 'progressive') {
-    state.playerKind = 'progressive';
     state.player = null;
-    video.src = url;
-    video.muted = true;
-    video.play().catch(() => logEvent('Autoplay bloqueado — clique no player para iniciar.'));
+    state.playerKind = 'progressive';
     startTelemetry(model, isLive);
     return;
   }
 
-  if (state.engine === 'shaka') {
-    startShakaPlayback(video, url, model, isLive);
+  let instance;
+  try {
+    instance = await waitForEngineInstance(clapprPlayer, kind);
+  } catch (e) {
+    logEvent(e.message);
     return;
   }
+  state.player = instance;
+  state.playerKind = kind;
+  const video = videoEl();
+  video.addEventListener('waiting', () => logEvent('Rebuffering (waiting)…'));
 
-  if (type === 'hls') {
-    if (!window.Hls || !Hls.isSupported()) {
-      if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = url;
-      } else {
-        logEvent('hls.js não suportado neste navegador — playback desativado.');
-        return;
+  if (kind === 'hls') {
+    const hls = instance;
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { renderLadderPills(); renderTrackPickers(); });
+    hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => renderTrackPickers());
+    hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => renderTrackPickers());
+    hls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
+      const lv = hls.levels[d.level];
+      if (lv) {
+        logEvent(`Troca de nível → ${lv.width}×${lv.height} @ ${P.fmtBits(lv.bitrate)}`);
+        if (state.qoe) state.qoe.onLevelSwitch(lv.bitrate / 1e6);
       }
-    } else {
-      const hls = new Hls({
-        enableWorker: true, capLevelToPlayerSize: false,
-        cmcd: { sessionId: cmcdSessionId(), contentId: cmcdContentId() },
-      });
-      state.player = hls;
-      state.playerKind = 'hls';
-      hls.loadSource(url);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { renderLadderPills(); renderTrackPickers(); });
-      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => renderTrackPickers());
-      hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => renderTrackPickers());
-      hls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
-        const lv = hls.levels[d.level];
-        if (lv) {
-          logEvent(`Troca de nível → ${lv.width}×${lv.height} @ ${P.fmtBits(lv.bitrate)}`);
-          if (state.qoe) state.qoe.onLevelSwitch(lv.bitrate / 1e6);
-        }
-      });
-      hls.on(Hls.Events.ERROR, (_, d) => {
-        logEvent(`Erro hls.js [${d.type}/${d.details}]${d.fatal ? ' (FATAL)' : ''}`);
-        if (d.fatal) {
-          if (d.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-          else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-        }
-      });
-    }
+    });
+    hls.on(Hls.Events.ERROR, (_, d) => {
+      logEvent(`Erro hls.js [${d.type}/${d.details}]${d.fatal ? ' (FATAL)' : ''}`);
+      if (d.fatal) {
+        if (d.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+        else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+      }
+    });
+    // hls.js/dash-shaka já iniciaram o carregamento sozinhos ao instanciar o
+    // Clappr.Player (source foi passado nas opções) — só falta garantir o mute.
+    renderLadderPills();
+    renderTrackPickers();
   } else {
-    const player = dashjs.MediaPlayer().create();
-    state.player = player;
-    state.playerKind = 'dash';
-    try {
-      player.updateSettings({ streaming: { cmcd: { enabled: true, sid: cmcdSessionId(), cid: cmcdContentId() } } });
-    } catch { /* versão sem suporte a CMCD */ }
-    player.initialize(video, url, true);
-    player.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => { renderLadderPills(); renderTrackPickers(); });
-    try { player.on(dashjs.MediaPlayer.events.TEXT_TRACKS_ADDED, () => renderTrackPickers()); } catch { /* evento pode não existir nesta versão */ }
-    player.on(dashjs.MediaPlayer.events.QUALITY_CHANGE_RENDERED, (e) => {
-      if (e.mediaType !== 'video') return;
-      try {
-        const info = player.getBitrateInfoListFor('video')[e.newQuality];
-        if (info) {
-          logEvent(`Troca de nível → ${info.width}×${info.height} @ ${P.fmtBits(info.bitrate)}`);
-          if (state.qoe) state.qoe.onLevelSwitch(info.bitrate / 1e6);
-        }
-      } catch { /* ignore */ }
+    const shakaPlayer = instance;
+    shakaPlayer.addEventListener('error', (e) => {
+      const detail = e.detail || {};
+      logEvent(`Erro Shaka [código ${detail.code}]${detail.severity >= 2 ? ' (FATAL)' : ''}`);
     });
-    player.on(dashjs.MediaPlayer.events.ERROR, (e) => {
-      logEvent(`Erro dash.js: ${(e.error && (e.error.message || e.error.code)) || 'desconhecido'}`);
+    shakaPlayer.addEventListener('adaptation', () => {
+      const active = shakaPlayer.getVariantTracks().find((t) => t.active);
+      if (active && active.width) {
+        logEvent(`Troca de nível → ${active.width}×${active.height} @ ${P.fmtBits(active.bandwidth)}`);
+        if (state.qoe) state.qoe.onLevelSwitch(active.bandwidth / 1e6);
+      }
     });
+    shakaPlayer.addEventListener('buffering', (e) => { if (e.buffering) logEvent('Rebuffering (buffering)…'); });
+    shakaPlayer.addEventListener('trackschanged', () => renderTrackPickers());
+    shakaPlayer.addEventListener('texttrackvisibility', () => renderTrackPickers());
+    renderLadderPills();
+    renderTrackPickers();
   }
-
-  video.muted = true;
-  video.play().catch(() => logEvent('Autoplay bloqueado — clique no player para iniciar.'));
-
-  startTelemetry(model, isLive);
-}
-
-async function startShakaPlayback(video, url, model, isLive) {
-  if (!window.shaka || !shaka.Player.isBrowserSupported()) {
-    logEvent('Shaka Player não suportado neste navegador.');
-    return;
-  }
-  const player = new shaka.Player();
-  state.player = player;
-  state.playerKind = 'shaka';
-  try {
-    player.configure({ cmcd: { enabled: true, sessionId: cmcdSessionId(), contentId: cmcdContentId() } });
-  } catch { /* versão sem suporte a CMCD */ }
-  try {
-    await player.attach(video);
-  } catch (e) {
-    logEvent('Erro ao anexar o Shaka Player ao vídeo: ' + e.message);
-    return;
-  }
-
-  player.addEventListener('error', (e) => {
-    const detail = e.detail || {};
-    logEvent(`Erro Shaka [código ${detail.code}]${detail.severity >= 2 ? ' (FATAL)' : ''}`);
-  });
-  player.addEventListener('adaptation', () => {
-    const active = player.getVariantTracks().find((t) => t.active);
-    if (active && active.width) {
-      logEvent(`Troca de nível → ${active.width}×${active.height} @ ${P.fmtBits(active.bandwidth)}`);
-      if (state.qoe) state.qoe.onLevelSwitch(active.bandwidth / 1e6);
-    }
-  });
-  player.addEventListener('buffering', (e) => { if (e.buffering) logEvent('Rebuffering (buffering)…'); });
-  player.addEventListener('trackschanged', () => renderTrackPickers());
-  player.addEventListener('texttrackvisibility', () => renderTrackPickers());
-
-  try {
-    await player.load(url);
-  } catch (e) {
-    logEvent(`Erro ao carregar no Shaka Player [${e.code || '—'}]: ${e.message || e}`);
-    return;
-  }
-  renderLadderPills();
-  renderTrackPickers();
 
   video.muted = true;
   video.play().catch(() => logEvent('Autoplay bloqueado — clique no player para iniciar.'));
@@ -1712,6 +1746,7 @@ function populateQualityVariantSelect(model) {
 async function attachLockedVariant(video, model, variant) {
   video.muted = true;
   if (model.protocol === 'HLS') {
+    await ensureHlsGlobal(); // motor principal pode estar em Shaka — garante window.Hls mesmo assim
     const hls = new Hls({ enableWorker: true });
     state.qualityPlayer = hls;
     const url = state.lastPlay && state.lastPlay.url.startsWith('/p/') ? proxify(variant.uri) : variant.uri;
@@ -2164,23 +2199,29 @@ function saveHistoryEntry(url, model, adBreaks) {
     .catch(() => { /* histórico é best-effort — não interrompe a inspeção */ });
 }
 
-async function loadHistory() {
+/** @param {boolean} [isInitial] true só na chamada de bootstrap (antes de
+ * qualquer inspeção rodar) — nesse caso, se já existir histórico salvo,
+ * abre o cockpit direto no painel de Histórico (item 10 do menu), do
+ * mesmo jeito que a antiga seção solta ficava visível sozinha antes de
+ * o histórico virar um item de menu. Em chamadas seguintes (depois de
+ * salvar uma nova inspeção) não mexe na navegação atual do usuário. */
+async function loadHistory(isInitial) {
   try {
     const res = await fetch('/api/history?limit=50'); // painel tem scroll (.history-list), então mostra mais que os últimos 10
-    if (!res.ok) { $('#sec-history').hidden = true; return; }
+    if (!res.ok) return;
     const { items } = await res.json();
-    renderHistoryList(items || []);
-  } catch {
-    $('#sec-history').hidden = true;
-  }
+    renderHistoryList(items || [], isInitial);
+  } catch { /* histórico é best-effort */ }
 }
 
-function renderHistoryList(items) {
-  const section = $('#sec-history');
+function renderHistoryList(items, isInitial) {
   const list = $('#history-list');
   list.innerHTML = '';
-  if (!items.length) { section.hidden = true; return; }
-  section.hidden = false;
+  if (!items.length) return;
+  if (isInitial && $('#results').hidden) {
+    $('#results').hidden = false;
+    if (window.selectCockpitPanel) window.selectCockpitPanel('historico');
+  }
   $('#history-note').textContent = `${items.length} teste${items.length > 1 ? 's' : ''} recente${items.length > 1 ? 's' : ''} — clique para reabrir (somente leitura, sem player).`;
   for (const item of items) {
     const li = el('li');
@@ -2209,6 +2250,9 @@ function restoreHistoryEntry(item) {
   for (const k of Object.keys(state.charts)) destroyChart(k);
   const model = item.summary;
   $('#results').hidden = false;
+  // o painel de Histórico pode estar ativo no momento do clique — troca pra
+  // Visão geral, que é quem acabou de ser (re)preenchido logo abaixo.
+  if (window.selectCockpitPanel) window.selectCockpitPanel('overview');
   setStatus('Sessão histórica de ' + new Date(item.ts).toLocaleString('pt-BR') + ' — somente leitura, sem player.', 'busy');
   renderBadges(model);
   renderKV($('#overview'), model.overview);
@@ -2230,7 +2274,7 @@ function restoreHistoryEntry(item) {
  * ================================================================ */
 
 document.addEventListener('DOMContentLoaded', () => {
-  loadHistory();
+  loadHistory(true);
 
   $('#form').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -2263,20 +2307,16 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#btn-quality-start').addEventListener('click', () => startQualityCompare());
   $('#btn-quality-stop').addEventListener('click', () => stopQualityCompare());
 
-  for (const r of document.querySelectorAll('input[name="engine"]')) {
-    r.addEventListener('change', (e) => {
-      state.engine = e.target.value;
-      logEvent(`Motor de reprodução alterado para ${state.engine === 'shaka' ? 'Shaka Player' : 'HLS.js'}.`);
-      if (state.lastPlay) {
-        stopPlayback();
-        const { type, url, model, isLive } = state.lastPlay;
-        startPlayback(type, url, model, isLive);
-      }
-    });
-  }
-
-  // rebuffering no log — registrado uma única vez (o QoE tem os próprios listeners)
-  $('#video').addEventListener('waiting', () => logEvent('Rebuffering (waiting)…'));
+  $('#engine-select').addEventListener('change', (e) => {
+    state.engine = e.target.value;
+    state.engineManuallySet = true; // não deixa mais o default por tipo de manifest sobrescrever
+    logEvent(`Motor de reprodução alterado para ${ENGINE_BUNDLES[state.engine].label}.`);
+    if (state.lastPlay) {
+      stopPlayback();
+      const { type, url, model, isLive } = state.lastPlay;
+      startPlayback(type, url, model, isLive);
+    }
+  });
 
   // exportação de sessão
   $('#btn-export-json').addEventListener('click', () => exportSession('json'));

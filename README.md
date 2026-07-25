@@ -194,8 +194,10 @@ public/
   js/youtube.js           mapeia o JSON do yt-dlp → modelo do inspetor (YouTube)
   js/globoplay.js         detecção de URL do Globoplay (resolução em si é 100% server-side)
   js/app.js               orquestração: fetch → parse → tabelas → playback → telemetria
-  vendor/hls.min.js       playback HLS (hls.js)
-  vendor/dash.all.min.js  playback DASH (dash.js)
+  vendor/clappr/          Clappr core + plugins de playback (hls.js/Shaka) — envelope do player
+  vendor/hls-*.min.js     hls.js, 2 versões (pinada "Globo" + mais recente — trocáveis no combo-box)
+  vendor/shaka-*.compiled.js  Shaka Player, 2 versões (idem)
+  vendor/dash.all.min.js  dash.js — usado só pelo comparador de qualidade PSNR/SSIM, não pelo player principal
   samples/                manifests de exemplo (HLS com HDR/legendas/Atmos; MPD com DRM)
 ```
 
