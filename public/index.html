@@ -196,6 +196,18 @@
         </div>
 
         <div class="monitor-rail">
+          <div class="mon-card chroma">
+            <div class="mon-title">◇ Cromaticidade CIE 1931 xy</div>
+            <details>
+              <summary>Sobre esta amostragem ▾</summary>
+              <p class="note">Cada ponto é um pixel amostrado do frame mais recente, na cor real dele, convertido para
+                coordenadas de cromaticidade — mostra se o conteúdo está de fato usando um gamut mais amplo que o
+                Rec.709/sRGB. Não acumula histórico: a cada nova amostragem os pontos são substituídos pelos do frame atual.</p>
+              <p id="chroma-method-note" class="note"></p>
+            </details>
+            <div id="chart-chroma"></div>
+          </div>
+
           <div class="mon-card alerts">
             <div class="mon-title">▲ Alertas de monitoração</div>
             <details>
@@ -209,18 +221,6 @@
               </div>
             </details>
             <div id="alert-list"></div>
-          </div>
-
-          <div class="mon-card chroma">
-            <div class="mon-title">◇ Cromaticidade CIE 1931 xy</div>
-            <details>
-              <summary>Sobre esta amostragem ▾</summary>
-              <p class="note">Cada ponto é um pixel amostrado do frame mais recente, na cor real dele, convertido para
-                coordenadas de cromaticidade — mostra se o conteúdo está de fato usando um gamut mais amplo que o
-                Rec.709/sRGB. Não acumula histórico: a cada nova amostragem os pontos são substituídos pelos do frame atual.</p>
-              <p id="chroma-method-note" class="note"></p>
-            </details>
-            <div id="chart-chroma"></div>
           </div>
 
           <div class="mon-card events">
