@@ -2199,29 +2199,23 @@ function saveHistoryEntry(url, model, adBreaks) {
     .catch(() => { /* histórico é best-effort — não interrompe a inspeção */ });
 }
 
-/** @param {boolean} [isInitial] true só na chamada de bootstrap (antes de
- * qualquer inspeção rodar) — nesse caso, se já existir histórico salvo,
- * abre o cockpit direto no painel de Histórico (item 10 do menu), do
- * mesmo jeito que a antiga seção solta ficava visível sozinha antes de
- * o histórico virar um item de menu. Em chamadas seguintes (depois de
- * salvar uma nova inspeção) não mexe na navegação atual do usuário. */
-async function loadHistory(isInitial) {
+/** Só popula a lista — o painel de Histórico é um item de menu como
+ * qualquer outro (seção 10, depois de QoE): fica quieto/oculto até o
+ * usuário clicar nele, nunca abre nem toma espaço sozinho ao carregar a
+ * página. */
+async function loadHistory() {
   try {
     const res = await fetch('/api/history?limit=50'); // painel tem scroll (.history-list), então mostra mais que os últimos 10
     if (!res.ok) return;
     const { items } = await res.json();
-    renderHistoryList(items || [], isInitial);
+    renderHistoryList(items || []);
   } catch { /* histórico é best-effort */ }
 }
 
-function renderHistoryList(items, isInitial) {
+function renderHistoryList(items) {
   const list = $('#history-list');
   list.innerHTML = '';
   if (!items.length) return;
-  if (isInitial && $('#results').hidden) {
-    $('#results').hidden = false;
-    if (window.selectCockpitPanel) window.selectCockpitPanel('historico');
-  }
   $('#history-note').textContent = `${items.length} teste${items.length > 1 ? 's' : ''} recente${items.length > 1 ? 's' : ''} — clique para reabrir (somente leitura, sem player).`;
   for (const item of items) {
     const li = el('li');
@@ -2274,7 +2268,7 @@ function restoreHistoryEntry(item) {
  * ================================================================ */
 
 document.addEventListener('DOMContentLoaded', () => {
-  loadHistory(true);
+  loadHistory();
 
   $('#form').addEventListener('submit', (e) => {
     e.preventDefault();
