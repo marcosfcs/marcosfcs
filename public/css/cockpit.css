@@ -131,11 +131,25 @@
 
 .monitor-rail {
   min-width: 0; display: flex; flex-direction: column; gap: 12px;
-  max-height: 320px; overflow-y: auto; padding-right: 2px;
+  min-height: 0; overflow-y: auto; padding-right: 2px;
 }
 .mon-card {
   background: var(--page); border: 1px solid var(--grid); border-radius: var(--radius-panel);
   padding: 10px 12px;
+}
+/* Cromaticidade cresce pra ocupar toda a altura sobrando na coluna do
+   monitor (o mesmo espaço vertical do player ao lado); alertas/eventos
+   mantêm altura natural, já limitada pelo próprio scroll interno deles. */
+.mon-card.chroma {
+  flex: 1 1 auto; min-height: 220px;
+  display: flex; flex-direction: column;
+}
+.mon-card.chroma #chart-chroma.chroma-fill {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+}
+.mon-card.chroma #chart-chroma.chroma-fill .chart-canvas {
+  flex: 1 1 auto; min-height: 140px;
 }
 .mon-card > .mon-title {
   display: flex; align-items: center; gap: 8px; margin: 0 0 8px;

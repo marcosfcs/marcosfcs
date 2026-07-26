@@ -635,7 +635,7 @@ function setupTelemetryCharts(isLive) {
     xMin: 0, xMax: 255, height: 220, yMin: 0,
   });
   destroyChart('chroma');
-  state.charts.chroma = new StreamChromaticity.ChromaticityChart($('#chart-chroma'), { height: 160 });
+  state.charts.chroma = new StreamChromaticity.Chromaticity3DChart($('#chart-chroma'), { fillHeight: true });
   destroyChart('chroma3d');
   state.charts.chroma3d = new StreamChromaticity.Chromaticity3DChart($('#chart-chroma-3d'), { height: 340 });
 
@@ -1568,6 +1568,7 @@ async function startPlayback(type, url, model, isLive) {
     mute: true,
     width: '100%',
     height: '100%',
+    plugins: { core: [window.ClapprPlugins.MediaControl] },
   };
 
   let kind = 'progressive';
@@ -1579,13 +1580,13 @@ async function startPlayback(type, url, model, isLive) {
       return;
     }
     if (kind === 'hls') {
-      clapprOpts.plugins = { playback: [window.HlsjsPlayback] };
+      clapprOpts.plugins.playback = [window.HlsjsPlayback];
       clapprOpts.playback = { hlsjsConfig: {
         enableWorker: true, capLevelToPlayerSize: false,
         cmcd: { sessionId: cmcdSessionId(), contentId: cmcdContentId() },
       } };
     } else {
-      clapprOpts.plugins = { playback: [window.DashShakaPlayback] };
+      clapprOpts.plugins.playback = [window.DashShakaPlayback];
       clapprOpts.playback = { shakaConfiguration: {
         cmcd: { enabled: true, sessionId: cmcdSessionId(), contentId: cmcdContentId() },
       } };

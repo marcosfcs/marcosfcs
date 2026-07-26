@@ -330,16 +330,17 @@ class ChromaticityChart {
 class Chromaticity3DChart {
   constructor(container, opts) {
     this.container = container;
-    this.opts = Object.assign({ height: 340 }, opts);
+    this.opts = Object.assign({ height: 340, fillHeight: false }, opts);
     this.domain = { xMin: 0, xMax: 0.8, yMin: 0, yMax: 0.9 };
     this.points = [];
     this.yaw = -0.6;
     this.pitch = 0.45;
 
     container.classList.add('chroma-box');
+    if (this.opts.fillHeight) container.classList.add('chroma-fill');
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'chart-canvas';
-    this.canvas.style.height = this.opts.height + 'px';
+    if (!this.opts.fillHeight) this.canvas.style.height = this.opts.height + 'px';
     this.canvas.style.cursor = 'grab';
     this.canvas.style.touchAction = 'none';
     container.appendChild(this.canvas);
@@ -466,7 +467,7 @@ class Chromaticity3DChart {
   _layout() {
     const dpr = window.devicePixelRatio || 1;
     const w = this.container.clientWidth;
-    const h = this.opts.height;
+    const h = this.opts.fillHeight ? (this.canvas.clientHeight || this.opts.height) : this.opts.height;
     if (this.canvas.width !== Math.round(w * dpr) || this.canvas.height !== Math.round(h * dpr)) {
       this.canvas.width = Math.round(w * dpr);
       this.canvas.height = Math.round(h * dpr);
