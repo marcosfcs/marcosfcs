@@ -22,6 +22,19 @@ function isYouTubeUrl(url) {
   }
 }
 
+const EXT_MIMETYPE = { mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', mov: 'video/quicktime', '3gp': 'video/3gpp' };
+
+/**
+ * A URL real do YouTube não tem extensão de arquivo (/videoplayback?...),
+ * então o player nativo (Clappr HTML5Video) não consegue adivinhar o
+ * container por sniff de URL — precisa do mimeType explícito. `ext` vem do
+ * campo `ext` do yt-dlp para o formato escolhido; mp4 é o padrão seguro
+ * quando não souber (é o container que o YouTube mais usa em progressivo).
+ */
+function mimeTypeForExt(ext) {
+  return EXT_MIMETYPE[(ext || '').toLowerCase()] || 'video/mp4';
+}
+
 function dynamicRangeLabel(dr) {
   if (!dr || /sdr/i.test(dr)) return { text: 'SDR', hdr: false };
   if (/hlg/i.test(dr)) return { text: 'HLG', hdr: true };
@@ -79,11 +92,15 @@ function buildModelFromYtInfo(info) {
   // ordena vídeo por bitrate desc (como um master ABR)
   video.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
 
+  // yt-dlp entrega subtitles/automatic_captions como OBJETO (chave = idioma,
+  // valor = lista de formatos), não array — iterar direto com for...of
+  // lança "object is not iterable" pra qualquer vídeo que tenha legenda
+  // (praticamente todos, por causa da legenda automática).
   const subtitles = [];
-  for (const lang of info.subtitles || []) {
+  for (const lang of Object.keys(info.subtitles || {})) {
     subtitles.push({ name: lang, lang, kind: 'legenda', forced: false, default: false, codecs: 'YouTube (via yt-dlp)' });
   }
-  for (const lang of info.automatic_captions || []) {
+  for (const lang of Object.keys(info.automatic_captions || {})) {
     subtitles.push({ name: lang, lang, kind: 'closed captions (auto)', forced: false, default: false, codecs: 'legenda automática' });
   }
 
@@ -101,7 +118,7 @@ function buildModelFromYtInfo(info) {
       'Duração': info.duration ? YTP.fmtDur(info.duration) : (live ? 'contínua (live)' : '—'),
       'Formatos de vídeo': String(video.length),
       'Faixas de áudio': String(audio.length),
-      'Legendas (manuais / auto)': `${(info.subtitles || []).length} / ${(info.automatic_captions || []).length}`,
+      'Legendas (manuais / auto)': `${Object.keys(info.subtitles || {}).length} / ${Object.keys(info.automatic_captions || {}).length}`,
       'HDR disponível': anyHdr ? 'Sim' : 'Não — SDR',
       'DRM': 'Não aplicável (mídia do YouTube)',
     },
@@ -127,7 +144,11 @@ function pickPlaybackSource(info) {
   const progressive = fmts
     .filter((f) => f.vcodec && f.vcodec !== 'none' && f.acodec && f.acodec !== 'none' && f.url)
     .sort((a, b) => (b.height || 0) - (a.height || 0) || (b.tbr || 0) - (a.tbr || 0))[0];
-  if (progressive) return { kind: 'progressive', url: progressive.url, height: progressive.height };
+  // a URL real do YouTube (/videoplayback?...) não tem extensão de arquivo —
+  // o Clappr escolhe o playback nativo por sniff de extensão na URL, então
+  // sem essa dica explícita ele não acha ninguém que toque a fonte e nem
+  // cria o <video>. `ext` do yt-dlp mapeia pro mimeType correto do container.
+  if (progressive) return { kind: 'progressive', url: progressive.url, height: progressive.height, ext: progressive.ext || null };
 
   // fallback: HLS mesmo em VOD, se existir
   const hls = fmts.find((f) => /m3u8/i.test(f.protocol || '') && (f.manifest_url || f.url));
@@ -136,4 +157,4 @@ function pickPlaybackSource(info) {
   return null;
 }
 
-window.StreamYouTube = { isYouTubeUrl, buildModelFromYtInfo, pickPlaybackSource };
+window.StreamYouTube = { isYouTubeUrl, buildModelFromYtInfo, pickPlaybackSource, mimeTypeForExt };

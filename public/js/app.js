@@ -1562,7 +1562,7 @@ function renderTrackPickers() {
  * o resto do arquivo (getLadder/setLadder/getAudioTracks/etc., telemetria)
  * continua falando com ela do jeito de sempre — só quem a criou mudou.
  */
-async function startPlayback(type, url, model, isLive) {
+async function startPlayback(type, url, model, isLive, progressiveMimeType) {
   state.drmBlocked = false;
   state.forcedLevel = -1; // toda nova sessão de playback começa em ABR automático
   $('#ladder-picker').hidden = true; $('#ladder-select').innerHTML = '';
@@ -1570,7 +1570,7 @@ async function startPlayback(type, url, model, isLive) {
   $('#subs-picker').hidden = true; $('#subs-pills').innerHTML = '';
   $('#color-note-runtime').textContent = '';
   $('#chroma-method-note').textContent = '';
-  state.lastPlay = { type, url, model, isLive };
+  state.lastPlay = { type, url, model, isLive, progressiveMimeType };
 
   // Default do motor por tipo de manifest (HLS→hls.js Globo, DASH→Shaka
   // Globo) — só na primeira vez; depois que o usuário troca manualmente no
@@ -1592,6 +1592,12 @@ async function startPlayback(type, url, model, isLive) {
     height: '100%',
     plugins: { core: [window.ClapprPlugins.MediaControl] },
   };
+
+  if (type === 'progressive') {
+    // sem isso, o Clappr não acha nenhum playback pra fontes sem extensão
+    // reconhecível na URL (caso do YouTube) e não cria vídeo nenhum
+    clapprOpts.mimeType = progressiveMimeType || 'video/mp4';
+  }
 
   let kind = 'progressive';
   if (type !== 'progressive') {
@@ -2022,7 +2028,7 @@ async function inspectYouTube(url) {
   probeContainer('directUrl', src.url, null);
   setupTelemetryCharts(false);
   setStatus('', '');
-  startPlayback('progressive', proxify(src.url), model, false);
+  startPlayback('progressive', proxify(src.url), model, false, StreamYouTube.mimeTypeForExt(src.ext));
   logEvent('Playback iniciado (mudo) a partir do formato progressivo do YouTube.');
   return true;
 }
@@ -2335,8 +2341,8 @@ document.addEventListener('DOMContentLoaded', () => {
     logEvent(`Motor de reprodução alterado para ${ENGINE_BUNDLES[state.engine].label}.`);
     if (state.lastPlay) {
       stopPlayback();
-      const { type, url, model, isLive } = state.lastPlay;
-      startPlayback(type, url, model, isLive);
+      const { type, url, model, isLive, progressiveMimeType } = state.lastPlay;
+      startPlayback(type, url, model, isLive, progressiveMimeType);
     }
   });
 
@@ -2405,9 +2411,9 @@ async function applyThrottle(mbps) {
     const proxied = proxify(state.sessionUrl);
     if (proxied !== state.lastPlay.url) {
       $('#force-proxy').checked = true;
-      const { type, model, isLive } = state.lastPlay;
+      const { type, model, isLive, progressiveMimeType } = state.lastPlay;
       stopPlayback();
-      startPlayback(type, proxied, model, isLive);
+      startPlayback(type, proxied, model, isLive, progressiveMimeType);
       logEvent('TESTE DE REDE: playback redirecionado para o proxy local para aplicar o limite.');
       logEvent('Observação: a troca de perfil/ladder aparece quando o buffer do player drena (~10–30s) — comportamento normal do ABR.');
     }
