@@ -1,7 +1,7 @@
 /* ══════════════════════════════════════════════════════════════════
    Cockpit layout (wireframe 1a) — sobrepõe o layout de scroll único.
    Menu lateral navega os metadados; o quadro de monitoração
-   (Player 08 + Alertas + Cromaticidade + Eventos) fica STICKY no topo.
+   (Player + Alertas + Cromaticidade + Eventos) rola junto com a página.
    Carregado DEPOIS de style.css — só adiciona/sobrepõe layout.
    ══════════════════════════════════════════════════════════════════ */
 
@@ -88,12 +88,12 @@
 
 .detail-col { min-width: 0; display: flex; flex-direction: column; gap: 20px; }
 
-/* ---------- MONITOR sticky ----------
+/* ---------- MONITOR ----------
    Bloco ~30% mais baixo que o original: foco na redução dos tiles de
    estado/tempo/resolução (mais tiles por linha + padding/fonte menores),
-   player 20% menor, e as demais fontes do bloco cortadas em ~20%. */
+   player 20% menor, e as demais fontes do bloco cortadas em ~20%. Rola
+   junto com a página (não é mais sticky). */
 .monitor {
-  position: sticky; top: 82px; z-index: 20;
   background: var(--surface-1);
   border: 1px solid var(--accent);
   border-radius: var(--radius-card);
@@ -179,7 +179,7 @@
   .app-shell { grid-template-columns: 1fr; }
   .side-nav { position: static; flex-direction: row; flex-wrap: wrap; }
   .side-nav .nav-group { width: 100%; }
-  .monitor, .side-nav { position: static; }
+  .side-nav { position: static; }
 }
 
 /* ---------- painéis de detalhe ---------- */
