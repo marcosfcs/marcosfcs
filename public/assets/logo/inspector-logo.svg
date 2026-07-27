@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 120" width="440" height="120" role="img" aria-label="Stream Inspector">
+  <defs>
+    <linearGradient id="lring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F472B6"></stop>
+      <stop offset="0.5" stop-color="#D946EF"></stop>
+      <stop offset="1" stop-color="#A855F7"></stop>
+    </linearGradient>
+    <linearGradient id="lwm" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFFFFF"></stop>
+      <stop offset="1" stop-color="#E9D5FF"></stop>
+    </linearGradient>
+  </defs>
+  <g transform="translate(8,10) scale(0.781)">
+  <defs>
+    <linearGradient id="m-ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F472B6"></stop>
+      <stop offset="0.5" stop-color="#D946EF"></stop>
+      <stop offset="1" stop-color="#A855F7"></stop>
+    </linearGradient>
+    <linearGradient id="m-hat" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5B47A8"></stop>
+      <stop offset="1" stop-color="#2E2456"></stop>
+    </linearGradient>
+    <linearGradient id="m-brim" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4C3C87"></stop>
+      <stop offset="1" stop-color="#372B69"></stop>
+    </linearGradient>
+    <linearGradient id="m-lens" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.30"></stop>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0.06"></stop>
+    </linearGradient>
+    <clipPath id="m-badge"><circle cx="64" cy="64" r="62"></circle></clipPath>
+  </defs>
+
+  <circle cx="64" cy="64" r="62" fill="#12152B"></circle>
+
+  <g clip-path="url(#m-badge)">
+    
+    <path d="M24 128c0-21 17-30 28-33h24c11 3 28 12 28 33z" fill="#232749"></path>
+    <path d="M52 95 64 113 76 95l-4-2-8 9-8-9z" fill="#0E1124"></path>
+    <path d="M63 112h2v16h-2z" fill="#2A2E55"></path>
+    
+    <path d="M55 82h18v13c0 5-4 8-9 8s-9-3-9-8z" fill="#CE9070"></path>
+    
+    <ellipse cx="38.5" cy="64" rx="5.5" ry="7" fill="#E9B592"></ellipse>
+    <ellipse cx="89.5" cy="64" rx="5.5" ry="7" fill="#E9B592"></ellipse>
+    
+    <ellipse cx="64" cy="60" rx="25" ry="28" fill="#E9B592"></ellipse>
+    
+    <path d="M38 50c-1 27 9 45 26 45s27-18 26-45c-2 16-12 23-26 23S40 66 38 50z" fill="#221C2E"></path>
+    <path d="M44 84q20 11 40 0-6 11-20 11t-20-11z" fill="#2C2540"></path>
+    
+    <path d="M37 42h6l-1 18c-4-3-6-10-5-18z" fill="#241F31"></path>
+    <path d="M91 42h-6l1 18c4-3 6-10 5-18z" fill="#241F31"></path>
+    
+    <path d="M52 75q12 13 24 0-12 5-24 0z" fill="#FFFFFF"></path>
+    
+    <path d="M49 71c4-6 10-4 15-1 5-3 11-5 15 1-6-2-10 2-15 2s-9-4-15-2z" fill="#241F31"></path>
+    
+    <path d="M64 55c-2 6-4 10 0 11 4-1 2-5 0-11z" fill="#D79E78"></path>
+    
+    <path d="M45 57q6-5 12 0" fill="none" stroke="#241F31" stroke-width="2.8" stroke-linecap="round"></path>
+    <path d="M71 57q6-5 12 0" fill="none" stroke="#241F31" stroke-width="2.8" stroke-linecap="round"></path>
+    
+    <g fill="rgba(255,255,255,0.10)" stroke="#15182F" stroke-width="3.6">
+      <circle cx="51" cy="55" r="10.5"></circle>
+      <circle cx="77" cy="55" r="10.5"></circle>
+    </g>
+    <path d="M61.5 53q2.5-3 5 0" fill="none" stroke="#15182F" stroke-width="3"></path>
+    <path d="M40.5 52 34 54M87.5 52 94 54" stroke="#15182F" stroke-width="3" stroke-linecap="round"></path>
+    
+    <path d="M42 42q9-5 18 0" fill="none" stroke="#241F31" stroke-width="4" stroke-linecap="round"></path>
+    <path d="M68 42q9-5 18 0" fill="none" stroke="#241F31" stroke-width="4" stroke-linecap="round"></path>
+    
+    <path d="M38 45c-2-7 0-13 5-16l3 15z" fill="#241F31"></path>
+    <path d="M90 45c2-7 0-13-5-16l-3 15z" fill="#241F31"></path>
+    
+    <path d="M43 34c0-17 5-24 21-24s21 7 21 24z" fill="url(#m-hat)"></path>
+    <path d="M50 15q14 7 28 0-2-5-14-5t-14 5z" fill="#241F31" opacity="0.35"></path>
+    <path d="M43 28h42v7H43z" fill="#D946EF"></path>
+    <path d="M43 28h42v2.5H43z" fill="#F472B6" opacity="0.8"></path>
+    <ellipse cx="64" cy="36" rx="37" ry="7.5" fill="url(#m-brim)"></ellipse>
+    <ellipse cx="64" cy="34.8" rx="37" ry="6.8" fill="#544197"></ellipse>
+    
+    <path d="M101 101 108 108" stroke="url(#m-ring)" stroke-width="8.5" stroke-linecap="round"></path>
+    <circle cx="92" cy="92" r="13" fill="url(#m-lens)" stroke="url(#m-ring)" stroke-width="5.5"></circle>
+    <path d="M88 86.5 99 92.5 88 98.5z" fill="#22D3EE"></path>
+  </g>
+
+  <circle cx="64" cy="64" r="62" fill="none" stroke="url(#m-ring)" stroke-width="4"></circle>
+</g>
+  <text x="126" y="46" font-family="&#39;DM Mono&#39;,Menlo,Consolas,monospace" font-size="12" letter-spacing="3.4" fill="#8A8DB8">PLAYBACK &amp; EXPERIENCE</text>
+  <text x="126" y="82" font-family="&#39;GlobotipoCorporativa&#39;,&#39;DM Sans&#39;,system-ui,sans-serif" font-size="34" font-weight="700" letter-spacing="-0.8" fill="url(#lwm)">Stream Inspector</text>
+  <rect x="126" y="94" width="72" height="3" rx="1.5" fill="url(#lring)"></rect>
+</svg>

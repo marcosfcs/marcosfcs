@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Stream Inspector">
+  <defs>
+    <linearGradient id="r" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F472B6"></stop>
+      <stop offset="0.5" stop-color="#D946EF"></stop>
+      <stop offset="1" stop-color="#A855F7"></stop>
+    </linearGradient>
+    <clipPath id="c"><circle cx="32" cy="32" r="31"></circle></clipPath>
+  </defs>
+  <circle cx="32" cy="32" r="31" fill="#12152B"></circle>
+  <g clip-path="url(#c)">
+    
+    <path d="M10 64c0-11 9-16 15-18h14c6 2 15 7 15 18z" fill="#232749"></path>
+    <ellipse cx="32" cy="31" rx="14" ry="16" fill="#E9B592"></ellipse>
+    <path d="M17 25c0 16 6 27 15 27s15-11 15-27c-1 9-7 14-15 14s-14-5-15-14z" fill="#221C2E"></path>
+    <path d="M25 38q7 8 14 0-7 3-14 0z" fill="#FFFFFF"></path>
+    <g fill="none" stroke="#15182F" stroke-width="3">
+      <circle cx="25" cy="28" r="6"></circle>
+      <circle cx="39" cy="28" r="6"></circle>
+    </g>
+    <path d="M31 27h2" stroke="#15182F" stroke-width="2.6"></path>
+    <path d="M21 18c0-9 3-13 11-13s11 4 11 13z" fill="#4C3C87"></path>
+    <path d="M21 14.5h22V18H21z" fill="#D946EF"></path>
+    <ellipse cx="32" cy="19" rx="20" ry="4.2" fill="#544197"></ellipse>
+    <path d="M50 51 55 56" stroke="url(#r)" stroke-width="5" stroke-linecap="round"></path>
+    <circle cx="46" cy="46" r="7.5" fill="#22D3EE" fill-opacity="0.16" stroke="url(#r)" stroke-width="4"></circle>
+    <path d="M44 42.5 49.5 46 44 49.5z" fill="#22D3EE"></path>
+  </g>
+  <circle cx="32" cy="32" r="31" fill="none" stroke="url(#r)" stroke-width="2.5"></circle>
+</svg>
