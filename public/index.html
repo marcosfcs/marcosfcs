@@ -197,7 +197,13 @@
 
         <div class="monitor-rail">
           <div class="mon-card chroma">
-            <div class="mon-title">◇ Cromaticidade CIE xyY 3D — luminância no eixo Y</div>
+            <div class="mon-title">
+              <span>◇ Cromaticidade CIE xyY 3D — luminância no eixo Y</span>
+              <select id="chroma-color-mode" class="track-select" style="margin-left:auto;" title="Modo de cor dos pontos">
+                <option value="tonemap">Tom mapeado</option>
+                <option value="vivid">Saturação máxima</option>
+              </select>
+            </div>
             <details>
               <summary>Sobre esta amostragem ▾</summary>
               <p class="note">Cada ponto é um pixel amostrado do frame mais recente, na cor real dele, convertido para

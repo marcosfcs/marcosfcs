@@ -96,6 +96,41 @@ function pointInTriangle(px, py, [ax, ay], [bx, by], [cx, cy]) {
   return !(hasNeg && hasPos);
 }
 
+/**
+ * Um fillStyle inválido é ignorado SILENCIOSAMENTE pelo canvas 2D — o estilo
+ * anterior continua valendo. Antes de confiar em `color(display-p3 …)`,
+ * confirma que o navegador realmente sabe interpretar essa sintaxe (a
+ * concessão de colorSpace na criação do contexto e o parsing de fillStyle
+ * são capacidades independentes).
+ */
+function supportsP3FillStyle(ctx) {
+  const prev = ctx.fillStyle;
+  ctx.fillStyle = '#000000';
+  ctx.fillStyle = 'color(display-p3 0.4 0.5 0.6)';
+  const ok = ctx.fillStyle !== '#000000';
+  ctx.fillStyle = prev;
+  return ok;
+}
+
+/**
+ * Cria o contexto 2D no maior gamut disponível. `getContext()` só honra os
+ * atributos passados na PRIMEIRA chamada de um canvas — por isso pedimos
+ * display-p3 de cara e apenas VERIFICAMOS o que foi de fato concedido, sem
+ * tentar de novo depois. Sem nenhuma flag de navegador, Chromium/Safari
+ * recentes já concedem 'display-p3'; o padrão sRGB é o único fallback.
+ */
+function create2dContext(canvas) {
+  let ctx = null;
+  try { ctx = canvas.getContext('2d', { colorSpace: 'display-p3' }); } catch { /* atributo desconhecido */ }
+  if (!ctx) return { ctx: canvas.getContext('2d'), space: 'srgb' };
+  let space = 'srgb';
+  if (typeof ctx.getContextAttributes === 'function') {
+    const attrs = ctx.getContextAttributes();
+    if (attrs && attrs.colorSpace === 'display-p3' && supportsP3FillStyle(ctx)) space = 'display-p3';
+  }
+  return { ctx, space };
+}
+
 /* ================================================================ *
  * Componente visual
  * ================================================================ */
@@ -154,7 +189,10 @@ class ChromaticityChart {
     }
     container.appendChild(tiles);
 
-    this.ctx = this.canvas.getContext('2d');
+    const c2d = create2dContext(this.canvas);
+    this.ctx = c2d.ctx;
+    this.colorSpace = c2d.space; // 'srgb' | 'display-p3' — lido por app.js p/ diagnóstico
+    this.colorMode = 'tonemap'; // 'tonemap' | 'vivid'
     this._ro = new ResizeObserver(() => this.draw());
     this._ro.observe(container);
     this._mq = matchMedia('(prefers-color-scheme: dark)');
@@ -170,9 +208,29 @@ class ChromaticityChart {
     this.container.classList.remove('chroma-box');
   }
 
+  /** Troca "tom mapeado" (parece o vídeo) por "saturação máxima" (destaca o gamut), sem reamostrar. */
+  setColorMode(mode) {
+    this.colorMode = mode === 'vivid' ? 'vivid' : 'tonemap';
+    for (const p of this.points) p._fill = this._fillFor(p);
+    this.scheduleDraw();
+  }
+
+  /** Cor de exibição do ponto: display-p3 quando o canvas concedeu e o ponto carrega essa variante. */
+  _fillFor(p) {
+    const rgb = this.colorMode === 'vivid' && p.vivid ? p.vivid : p;
+    const disp = p.disp && (this.colorMode === 'vivid' ? p.disp.vivid : p.disp.tonemap);
+    if (this.colorSpace === 'display-p3' && disp) {
+      return `color(display-p3 ${disp.r.toFixed(4)} ${disp.g.toFixed(4)} ${disp.b.toFixed(4)})`;
+    }
+    return `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+  }
+
   /** Substitui a nuvem de pontos (instantâneo — sem acumular). */
   setPoints(points) {
     this.points = points;
+    // string de preenchimento memoizada — draw() roda a cada frame de
+    // interação (arrasto/resize), então não recalcula por ponto ali
+    for (const p of points) p._fill = this._fillFor(p);
     this._updateCoverage();
     this.scheduleDraw();
   }
@@ -296,7 +354,7 @@ class ChromaticityChart {
     // nuvem de pontos do frame atual
     for (const p of this.points) {
       if (p.x < D.xMin || p.x > D.xMax || p.y < D.yMin || p.y > D.yMax) continue;
-      ctx.fillStyle = `rgb(${p.r},${p.g},${p.b})`;
+      ctx.fillStyle = p._fill || `rgb(${p.r},${p.g},${p.b})`;
       ctx.beginPath();
       ctx.arc(X(p.x), Y(p.y), 2.2, 0, Math.PI * 2);
       ctx.fill();
@@ -385,7 +443,10 @@ class Chromaticity3DChart {
     }
     container.appendChild(tiles);
 
-    this.ctx = this.canvas.getContext('2d');
+    const c2d = create2dContext(this.canvas);
+    this.ctx = c2d.ctx;
+    this.colorSpace = c2d.space;
+    this.colorMode = 'tonemap';
     this._ro = new ResizeObserver(() => this.draw());
     this._ro.observe(container);
     this._mq = matchMedia('(prefers-color-scheme: dark)');
@@ -431,9 +492,27 @@ class Chromaticity3DChart {
     this.container.classList.remove('chroma-box');
   }
 
+  /** Troca "tom mapeado" (parece o vídeo) por "saturação máxima" (destaca o gamut), sem reamostrar. */
+  setColorMode(mode) {
+    this.colorMode = mode === 'vivid' ? 'vivid' : 'tonemap';
+    for (const p of this.points) p._fill = this._fillFor(p);
+    this.draw();
+  }
+
+  /** Cor de exibição do ponto: display-p3 quando o canvas concedeu e o ponto carrega essa variante. */
+  _fillFor(p) {
+    const rgb = this.colorMode === 'vivid' && p.vivid ? p.vivid : p;
+    const disp = p.disp && (this.colorMode === 'vivid' ? p.disp.vivid : p.disp.tonemap);
+    if (this.colorSpace === 'display-p3' && disp) {
+      return `color(display-p3 ${disp.r.toFixed(4)} ${disp.g.toFixed(4)} ${disp.b.toFixed(4)})`;
+    }
+    return `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+  }
+
   /** Substitui a nuvem de pontos (instantâneo — sem acumular), igual ao 2D. */
   setPoints(points) {
     this.points = points;
+    for (const p of points) p._fill = this._fillFor(p);
     this._updateCoverage();
     this.draw();
   }
@@ -548,10 +627,10 @@ class Chromaticity3DChart {
 
     // nuvem de pontos em xyY real, ordenada por profundidade (pintor's algorithm)
     const projected = this.points
-      .map((p) => Object.assign(proj(p.x, p.y, p.Y == null ? 0 : p.Y), { r: p.r, g: p.g, b: p.b }))
+      .map((p) => Object.assign(proj(p.x, p.y, p.Y == null ? 0 : p.Y), { fill: p._fill || `rgb(${p.r},${p.g},${p.b})` }))
       .sort((a, b) => a.depth - b.depth);
     for (const p of projected) {
-      ctx.fillStyle = `rgb(${p.r},${p.g},${p.b})`;
+      ctx.fillStyle = p.fill;
       ctx.beginPath();
       ctx.arc(p.sx, p.sy, 2.4, 0, Math.PI * 2);
       ctx.fill();

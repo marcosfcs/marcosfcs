@@ -23,6 +23,21 @@ class ColorAnalyzer {
     this.H = 180;
     this.canvas.width = this.W;
     this.canvas.height = this.H;
+
+    // Canvas SEPARADO, só para a nuvem de cromaticidade deste fallback
+    // (usado quando WebCodecs está indisponível ou falhou). Medi que um
+    // canvas display-p3 muda ligeiramente até a leitura pedida como 'srgb'
+    // (diferenças de arredondamento internas antes da quantização pro
+    // 8-bit) — por isso NÃO reaproveito `this.canvas`/`this.ctx` aqui: o
+    // canvas principal, usado pelos histogramas/APL/clip/alerta de tela
+    // preta, continua bit a bit igual ao de sempre.
+    this.wideCanvas = document.createElement('canvas');
+    this.wideCanvas.width = this.W;
+    this.wideCanvas.height = this.H;
+    try { this.wideCtx = this.wideCanvas.getContext('2d', { colorSpace: 'display-p3', willReadFrequently: true }); }
+    catch { this.wideCtx = null; }
+    this.wideGamut = !!(this.wideCtx && typeof this.wideCtx.getContextAttributes === 'function' &&
+      this.wideCtx.getContextAttributes().colorSpace === 'display-p3');
   }
 
   /** Retorna null se ainda não há frame decodificado. */
@@ -33,10 +48,16 @@ class ColorAnalyzer {
     const ar = v.videoWidth / v.videoHeight;
     const w = ar >= this.W / this.H ? this.W : Math.round(this.H * ar);
     const h = ar >= this.W / this.H ? Math.round(this.W / ar) : this.H;
-    let img;
+    let img, imgWide;
     try {
       this.ctx.drawImage(v, 0, 0, w, h);
       img = this.ctx.getImageData(0, 0, w, h).data;
+      if (this.wideGamut) {
+        try {
+          this.wideCtx.drawImage(v, 0, 0, w, h);
+          imgWide = this.wideCtx.getImageData(0, 0, w, h, { colorSpace: 'display-p3' }).data;
+        } catch { imgWide = null; }
+      }
     } catch (e) {
       // vídeo com proteção (tainted canvas / DRM) — análise indisponível
       return { blocked: true, error: e.name };
@@ -50,8 +71,13 @@ class ColorAnalyzer {
     const n = w * h;
 
     // amostragem esparsa para o diagrama de cromaticidade (instantâneo,
-    // custo de conversão xy é maior que o do histograma)
+    // custo de conversão xy é maior que o do histograma). Quando o canvas
+    // conseguiu Display-P3 (this.wideGamut) e a leitura P3 funcionou,
+    // usa `imgWide` (bytes já no gamut P3) em vez dos bytes sRGB — mesmo
+    // princípio do gráfico (Camada 3), aplicado aqui só à cromaticidade.
     const rgbToXy = window.StreamChromaticity && window.StreamChromaticity.rgb8ToXy;
+    const p3Point = window.StreamColorMath ? makeP3PointBuilder() : null;
+    const useWide = !!(imgWide && p3Point);
     const chromaPoints = [];
     const chromaStride = Math.max(1, Math.floor(n / 400)); // ~400 pontos por amostragem
     let pixelIndex = 0;
@@ -71,9 +97,14 @@ class ColorAnalyzer {
       if (y <= 4) clipLow++;
       else if (y >= 251) clipHigh++;
 
-      if (rgbToXy && pixelIndex % chromaStride === 0) {
-        const xy = rgbToXy(r, g, b);
-        if (xy) chromaPoints.push({ x: xy.x, y: xy.y, Y: Math.min(1, Math.max(0, xy.Y)), r, g, b });
+      if (pixelIndex % chromaStride === 0) {
+        if (useWide) {
+          const p = p3Point(imgWide[i], imgWide[i + 1], imgWide[i + 2]);
+          if (p) chromaPoints.push({ x: p.x, y: p.y, Y: Math.min(1, Math.max(0, p.Y)), r: p.r, g: p.g, b: p.b, disp: { tonemap: p.disp, vivid: p.disp, space: 'display-p3' } });
+        } else if (rgbToXy) {
+          const xy = rgbToXy(r, g, b);
+          if (xy) chromaPoints.push({ x: xy.x, y: xy.y, Y: Math.min(1, Math.max(0, xy.Y)), r, g, b });
+        }
       }
       const px = pixelIndex % w, py = (pixelIndex / w) | 0;
       const ti = Math.min(TH - 1, (py * TH / h) | 0) * TW + Math.min(TW - 1, (px * TW / w) | 0);
@@ -97,6 +128,39 @@ class ColorAnalyzer {
       thumb,
     };
   }
+}
+
+/**
+ * Constrói os campos de cromaticidade a partir de bytes já lidos em
+ * Display-P3 (mesma OETF do sRGB, primárias mais largas). Devolve tanto a
+ * cor sRGB (`r,g,b`, pro fallback rgb() quando o gráfico não tem canvas
+ * P3) quanto a P3 original (`disp`, pro `color(display-p3 …)`) — sem essa
+ * distinção, um byte P3 pintado com `rgb()` seria lido como sRGB e sairia
+ * com o matiz errado. Reaproveita as matrizes/EOTF de colorspace.js em vez
+ * de duplicá-las aqui.
+ */
+function makeP3PointBuilder() {
+  const M = window.StreamColorMath;
+  const prim = M.PRIMARIES_TO_XYZ.smpte432; // DCI-P3 D65
+  const toSrgb = M.XYZ_TO_OUT.srgb;
+  return (r, g, b) => {
+    const R = M.srgbInverseEotf(r / 255), G = M.srgbInverseEotf(g / 255), B = M.srgbInverseEotf(b / 255);
+    const X = prim[0][0] * R + prim[0][1] * G + prim[0][2] * B;
+    const Y = prim[1][0] * R + prim[1][1] * G + prim[1][2] * B;
+    const Z = prim[2][0] * R + prim[2][1] * G + prim[2][2] * B;
+    const sum = X + Y + Z;
+    if (sum < 1e-4) return null;
+    const srgbLin = M.desaturateIntoGamut([
+      toSrgb[0][0] * X + toSrgb[0][1] * Y + toSrgb[0][2] * Z,
+      toSrgb[1][0] * X + toSrgb[1][1] * Y + toSrgb[1][2] * Z,
+      toSrgb[2][0] * X + toSrgb[2][1] * Y + toSrgb[2][2] * Z,
+    ]);
+    return {
+      x: X / sum, y: Y / sum, Y,
+      r: M.linearToSrgb8(srgbLin[0]), g: M.linearToSrgb8(srgbLin[1]), b: M.linearToSrgb8(srgbLin[2]),
+      disp: { r: r / 255, g: g / 255, b: b / 255, space: 'display-p3' },
+    };
+  };
 }
 
 /** Diferença média absoluta entre dois thumbnails (0–255). */

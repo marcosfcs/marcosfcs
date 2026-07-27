@@ -86,6 +86,21 @@ const ENGINE_BUNDLES = {
   'shaka-5.2.2': { kind: 'shaka', src: 'vendor/shaka-5.2.2.compiled.js', label: 'Shaka Player 5.2.2 (mais recente)' },
 };
 
+/** Qual caminho leu os pixels do frame p/ a nuvem de cromaticidade — ver colorspace.js. */
+const PIXEL_METHOD_LABEL = {
+  'raw': 'Bruta — planos do VideoFrame (dado mestre, sem tone-mapping)',
+  'rgba-p3': 'Conversão RGBA/Display-P3 pelo navegador (já tone-mapped)',
+  'rgba-srgb': 'Conversão RGBA/sRGB pelo navegador (já tone-mapped)',
+  'none': 'Falhou — sem leitura direta',
+};
+const CHROMA_NOTE = {
+  'raw': (out) => 'Amostragem via WebCodecs (VideoFrame bruto) — gamut real do conteúdo decodificado, ' +
+    `sem tone-mapping de canvas. Saída: ${out === 'display-p3' ? 'Display-P3' : 'sRGB'}.`,
+  'rgba-p3': () => 'Amostragem via conversão RGBA/Display-P3 feita pelo próprio navegador — o formato bruto ' +
+    'do frame não pôde ser lido diretamente. As cores já passaram pelo tone-mapping do navegador: não são o dado mestre.',
+  'rgba-srgb': () => 'Amostragem via conversão RGBA/sRGB feita pelo próprio navegador — já tone-mapped, limitada ao gamut sRGB.',
+};
+
 function loadScriptOnce(src) {
   return new Promise((resolve, reject) => {
     const s = document.createElement('script');
@@ -1064,9 +1079,11 @@ function startTelemetry(model, isLive) {
 
         // cromaticidade: usa WebCodecs (gamut real, sem canvas) quando disponível;
         // senão cai no canvas 2D (aproximação sempre em Rec.709/SDR, documentada na UI)
+        const chartOutput = state.charts.chroma ? state.charts.chroma.colorSpace : 'srgb';
         if (state.colorSpaceProbe && state.colorSpaceProbe.ok) {
-          state.colorSpaceProbe.sample({ withPixels: true }).then((cs) => {
+          state.colorSpaceProbe.sample({ withPixels: true, output: chartOutput }).then((cs) => {
             if (!cs) return;
+            const disp = window.displayHdrInfo();
             renderKV($('#colorspace-overview'), {
               'Primárias (decodificado)': cs.primaries,
               'Transferência (decodificado)': cs.transfer,
@@ -1074,12 +1091,17 @@ function startTelemetry(model, isLive) {
               'Faixa completa (full range)': cs.fullRange == null ? '—' : (cs.fullRange ? 'Sim' : 'Não (limited/studio)'),
               'HDR real (decoder)': cs.hdr ? 'Sim' : 'Não — SDR',
               'Resolução codificada': `${cs.codedWidth}x${cs.codedHeight}`,
+              'Leitura de pixels (cromaticidade)': PIXEL_METHOD_LABEL[cs.pixelMethod] || '—',
+              'Gamut de saída do gráfico': chartOutput === 'display-p3'
+                ? 'Display-P3 (canvas wide-gamut concedido)' : 'sRGB (canvas padrão)',
+              'Display do usuário': `${disp['Faixa dinâmica do display']} · ${disp['Gama de cores do display']} · ${disp['Profundidade de cor reportada']}`,
             });
             if (cs.pixelsSupported && cs.chromaPoints && cs.chromaPoints.length) {
               state.charts.chroma.setPoints(cs.chromaPoints);
               state.charts.chroma3d.setPoints(cs.chromaPoints);
-              $('#chroma-method-note').textContent =
-                'Amostragem via WebCodecs (VideoFrame bruto) — gamut real do conteúdo decodificado, sem tone-mapping de canvas.';
+              $('#chroma-method-note').textContent = CHROMA_NOTE[cs.pixelMethod]
+                ? CHROMA_NOTE[cs.pixelMethod](chartOutput)
+                : CHROMA_NOTE.raw(chartOutput);
             } else {
               state.charts.chroma.setPoints(s.chromaPoints);
               state.charts.chroma3d.setPoints(s.chromaPoints);
@@ -2316,6 +2338,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const { type, url, model, isLive } = state.lastPlay;
       startPlayback(type, url, model, isLive);
     }
+  });
+
+  $('#chroma-color-mode').addEventListener('change', (e) => {
+    if (state.charts.chroma) state.charts.chroma.setColorMode(e.target.value);
+    if (state.charts.chroma3d) state.charts.chroma3d.setColorMode(e.target.value);
   });
 
   // exportação de sessão
