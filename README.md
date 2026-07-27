@@ -1,32 +1,176 @@
 # 📡 Stream Inspector — HLS / MPEG-DASH
 
-Sistema web para inspeção completa de transmissões de streaming a partir da URL do
-manifest (`.m3u8` ou `.mpd`). Cole a URL, clique em **Inspecionar** e o sistema
-apresenta tudo o que a transmissão contém:
+Ferramenta de inspeção e diagnóstico de streaming adaptativo. Recebe a URL de um
+manifest (`.m3u8` ou `.mpd`), reproduz o conteúdo com os mesmos motores usados em
+produção e expõe, lado a lado, tudo que normalmente fica espalhado entre o manifest
+bruto, o inspetor de rede do navegador e um scope de forma de onda: ladder de
+variantes, DRM, segmentação real, telemetria de ABR, rede/CDN, CMCD/CMSD, loudness
+(BS.1770-4), colorimetria SDR/HDR e QoE de sessão.
 
-| Camada | O que é apresentado | Formato |
+Não é um player de demonstração — é uma bancada de testes. Cole a URL, clique em
+**Inspecionar**, e cada seção abaixo é preenchida a partir de dados reais (o
+manifest parseado, o motor de playback instrumentado, o `<video>` amostrado
+quadro a quadro), não de heurísticas sobre o que o manifest *deveria* conter.
+
+| Seção | O que é medido | Como |
 |---|---|---|
-| Metadados | protocolo, tipo (VOD/ao vivo), versão, perfis, duração, períodos, buffer mínimo | tabela estática |
-| Vídeo | variantes/representações: resolução, bitrate pico/médio, FPS, codec (nome amigável + string), faixa de vídeo (SDR/PQ/HLG/Dolby Vision), HDCP | tabela estática |
-| Áudio | faixas: idioma, canais (estéreo/5.1/Atmos), codec, amostragem, bitrate, papéis | tabela estática |
-| Legendas | legendas e closed captions: idioma, formato (WebVTT/TTML/CEA-608), forçada/padrão | tabela estática |
-| DRM | Widevine, PlayReady, FairPlay, ClearKey, AES (via `EXT-X-KEY`/`ContentProtection`), default_KID | tabela estática |
-| Segmentação | modo (SegmentTemplate/Timeline/playlist), contagem, durações, descontinuidades | tabela + **gráfico temporal estático** |
-| Container real | inspeção binária de um segmento (PAT/PMT do MPEG-TS; moov/tenc/pssh do fMP4): streams reais, idiomas, KID/esquema de criptografia | tabela + indicadores |
-| Telemetria | buffer de reprodução (escalar + **timeline real de `video.buffered`**), bitrate do nível ativo, banda estimada, frames perdidos, latência live (edge e E2E via PROGRAM-DATE-TIME), FPS real vs nominal, trocas de ABR | **gráficos temporais dinâmicos** + tiles |
-| Rede/CDN | TTFB e throughput por segmento (via adaptador do motor **e** via Resource Timing API — independente do motor, cobre Shaka e o progressivo do YouTube); **breakdown DNS/TCP/TLS/TTFB/download**; headers de **CDN/edge** (x-cache, cf-ray, via…); **teste de rede** com limite de banda ajustável no proxy para provocar trocas de ladder ABR | gráficos + tabelas + seletor de throttle |
-| CMCD / CMSD | CMCD habilitado nos três motores (o que o player envia ao CDN) e leitura de CMSD (o que o CDN responde), quando presente | painel |
-| Áudio | VU meter L/R com peak-hold, nível RMS temporal (rápido), espectro de frequências, e **LUFS real (ITU-R BS.1770-4)** — Momentary/Short-term/Integrated com K-weighting e gating de verdade | medidores + gráficos |
-| Alertas | congelamento de vídeo, tela preta, silêncio, buffer baixo, banda insuficiente, FPS baixo, loudness acima do limite, playlist live estagnada — com thresholds ajustáveis | painel de alertas + log |
-| QoE | startup (1º frame), rebuffering (contagem/duração/ratio), trocas ABR, bitrate médio ponderado; **exportação da sessão** completa | tiles + JSON/CSV |
-| Baixa latência / anúncios | detecção de LL-HLS (`EXT-X-PART`/`PRELOAD-HINT`/`SERVER-CONTROL`) e LL-DASH (`ServiceDescription/Latency`); marcadores SCTE-35 do manifest (`EXT-X-DATERANGE`/`CUE-OUT`, DASH `EventStream`) | linha na visão geral + tabela condicional |
-| Análise de cor | **curvas de cor por canal RGB**, distribuição de luminância, luminância média (APL) e clipping de sombras/realces ao longo do tempo, diagrama de cromaticidade CIE 1931 xy com gamuts Rec.709/P3/Rec.2020, sinalização SDR/HDR do manifest × capacidade do display × **espaço de cor realmente decodificado (WebCodecs)** | **gráficos de curva** + tabela |
-| Qualidade (PSNR/SSIM) | comparação em tempo real entre uma referência (mezzanine) e uma variante específica do stream — dois `<video>` ocultos sincronizados por `currentTime`, amostrados via canvas | tiles + gráficos temporais |
+| Visão geral | protocolo, VOD/ao vivo, perfis, duração, períodos, buffer mínimo, HDR/DRM em badge | parse estático do manifest |
+| Vídeo | ladder completo: resolução, bitrate pico/médio, FPS, codec (nome amigável + string exata), faixa dinâmica por variante (SDR/PQ/HLG/Dolby Vision), HDCP | tabela por variante |
+| Áudio | faixas: idioma, canais (estéreo/5.1/Atmos), codec, taxa de amostragem, bitrate, papéis (dublagem, comentário, acessibilidade) | tabela por faixa |
+| Legendas & DRM | legendas/CC (idioma, WebVTT/TTML/CEA-608, forçada/padrão); Widevine, PlayReady, FairPlay, ClearKey, AES-128 (`EXT-X-KEY`/`ContentProtection`), `default_KID` | tabela + inspeção binária |
+| Segmentação | modo (SegmentTemplate/Timeline/playlist), contagem, duração, descontinuidades; para os últimos segmentos, leitura binária real do container (PAT/PMT do MPEG-TS; `moov`/`tenc`/`pssh` do fMP4) — streams e KID reais, não só o que o manifest declara | tabela + timeline |
+| Telemetria & rede | buffer real (`video.buffered`), bitrate do nível ativo, banda estimada, frames perdidos, latência live (edge e end-to-end via `PROGRAM-DATE-TIME`), FPS real × nominal, trocas de ABR, TTFB/throughput por segmento, breakdown DNS/TCP/TLS/download, headers de CDN (`x-cache`, `cf-ray`, `via`…), CMCD (o que o player envia) e CMSD (o que o CDN responde) | gráficos temporais + tabelas + teste de banda no proxy |
+| Áudio ao vivo | VU meter L/R com peak-hold, RMS temporal, espectro, e loudness **ITU-R BS.1770-4** (Momentary/Short-term/Integrated, com K-weighting e gating reais) e true peak (dBTP) | medidores + gráficos |
+| Cor & HDR | histogramas R/G/B e luminância, APL e clipping ao longo do tempo, diagrama de cromaticidade CIE xyY 3D (Rec.709/P3/Rec.2020), sinalização HDR do manifest × capacidade do display × espaço de cor **realmente decodificado** (WebCodecs) | gráficos 3D + tabela — ver seção própria abaixo |
+| QoE | startup (primeiro frame), rebuffering (contagem/duração/ratio), trocas de ABR, bitrate médio ponderado, exportação completa da sessão | tiles + JSON/CSV |
+| Alertas | congelamento, tela preta (com gate de silêncio), silêncio, buffer baixo, banda insuficiente, FPS baixo, loudness acima do limite, playlist ao vivo estagnada — thresholds ajustáveis em runtime | painel + log |
+| Baixa latência / anúncios | LL-HLS (`EXT-X-PART`/`PRELOAD-HINT`/`SERVER-CONTROL`) e LL-DASH (`ServiceDescription/Latency`); marcadores SCTE-35 (`EXT-X-DATERANGE`/`CUE-OUT`, DASH `EventStream`) | badge + tabela condicional |
+| Qualidade (PSNR/SSIM) | comparação em tempo real entre uma mezzanine de referência e uma variante do stream, amostrada via canvas | tiles + gráficos temporais |
 
-### Sobre PSNR/SSIM/VMAF
+## Player e motores de playback
 
-**PSNR e SSIM estão implementados de verdade** (seção "Análise de qualidade" dentro de
-Player e telemetria) — mas são métricas *com referência*: só fazem sentido quando a
+O `<video>` é envelopado pelo **Clappr** (`@clappr/core`, BSD-3-Clause) — o mesmo
+player usado internamente na Globo — que padroniza controles de transporte
+(play/pause/seek/volume) sobre qualquer motor de decodificação plugado nele.
+Dois motores são suportados, cada um em **duas versões instanciáveis** (a
+usada em produção e a mais recente do projeto), trocáveis em runtime por um
+combo-box sem precisar recarregar a página:
+
+| Manifest | Motor padrão | Versões disponíveis |
+|---|---|---|
+| HLS (`.m3u8`) | `hls.js` | `1.5.14` (produção) · `1.6.16` (mais recente) |
+| DASH (`.mpd`) | `Shaka Player` | `3.1.8` (produção) · `5.2.2` (mais recente) |
+
+A troca de motor reinicia o playback na mesma posição do manifest, preservando
+CMCD (`sessionId`/`contentId` estáveis pela sessão) e reaplicando os listeners
+de telemetria (nível ativo, tracks de áudio/legenda, erros) diretamente na
+instância real do motor — o inspetor nunca lê apenas o que o Clappr expõe de
+alto nível, sempre a API nativa de cada player por baixo.
+
+## Colorimetria e HDR
+
+Amostragem de cor tem dois caminhos, escolhidos automaticamente pelo que o
+navegador suporta:
+
+- **WebCodecs (`VideoFrame` bruto)**, quando disponível (Chromium/Edge hoje):
+  lê o frame decodificado *antes* de qualquer conversão do compositor,
+  aplicando a matriz de primárias real (Rec.709/DCI-P3/Rec.2020) e a EOTF
+  inversa correta por `transfer` (sRGB/BT.709/**PQ (SMPTE 2084)/HLG (ARIB
+  STD-B67)**) — inclusive normalizando a luminância absoluta de PQ/HLG para
+  luz referida ao display (branco difuso a 203 cd/m², ITU-R BT.2408), sem o
+  que HDR10 real renderizaria praticamente preto num diagrama ingênuo.
+- **Canvas 2D**, como fallback universal (e único caminho em navegadores sem
+  WebCodecs) — sempre limitado a SDR/Rec.709, documentado como tal na própria
+  UI (nunca finge precisão que não tem).
+
+O gráfico usa **Display-P3** quando o navegador concede (Chromium/Safari
+recentes, sem flag nenhuma), com fallback automático a sRGB — cobrindo mais
+gamut do que sRGB sozinho consegue expressar. Dois modos de cor, trocáveis
+sem reamostrar:
+
+- **Tom mapeado** — aproxima o que o vídeo realmente mostra (curva de
+  compressão de realces, aplicada só em conteúdo HDR).
+- **Saturação máxima** — normaliza cada ponto pelo canal de pico, já que a
+  luminância real ocupa o eixo Y do diagrama 3D; existe para tornar o uso de
+  gamut largo visualmente óbvio, não para parecer "natural".
+
+Um painel de diagnóstico (dentro de Cor & HDR) expõe qual caminho de leitura
+foi usado, o `colorSpace` real do frame decodificado e o gamut concedido ao
+canvas — importante porque HDR de verdade não é testável neste tipo de
+ambiente de desenvolvimento sem um display e conteúdo HDR reais; o painel
+existe para o usuário confirmar o comportamento na própria máquina.
+
+## Como rodar
+
+Requer apenas Node.js (≥16). O core do inspetor não tem dependências externas —
+`node server.js` funciona direto, sem `npm install`:
+
+```bash
+node server.js
+# → http://localhost:8787
+```
+
+Também funciona hospedado como página estática (`public/`), porém **sem o proxy
+de CORS** — nesse modo só é possível inspecionar streams cuja origem envie
+cabeçalhos CORS (`Access-Control-Allow-Origin`).
+
+### Backend alternativo em Go
+
+Existe também uma reescrita do backend (`server.js`) em Go, com o mesmo comportamento
+observável: mesmas rotas, mesmos formatos de resposta, mesmas variáveis de ambiente.
+O frontend (`public/`) é o mesmo para as duas versões — ele é servido embedado no
+binário Go via `//go:embed` (`assets.go`), não precisa copiar a pasta separadamente.
+
+```bash
+go run ./cmd/server
+# → http://localhost:8787
+
+# ou, pra gerar um binário único:
+go build -o stream-inspector-server ./cmd/server
+./stream-inspector-server
+```
+
+Histórico via `modernc.org/sqlite` (driver SQLite 100% Go, sem cgo) — mesmo schema e
+mesmo `~/.stream-inspector/history.sqlite` (ou `STREAM_INSPECTOR_DATA_DIR`) do
+server.js; não precisa migrar nada entre as duas versões. As duas versões
+(`server.js` e `go run ./cmd/server`) podem conviver no mesmo checkout — nenhuma
+delas apaga ou depende de arquivos da outra.
+
+### Segurança / rede
+
+O `server.js`/backend Go são ferramentas locais single-user, endurecidas com isso em mente:
+
+- **Escuta só em `127.0.0.1` por padrão.** Para expor na rede (só faça em rede
+  confiável): `HOST=0.0.0.0 node server.js`.
+- **O proxy `/p/` bloqueia alvos internos** (loopback, `169.254.0.0/16` de
+  metadata de nuvem, faixas privadas) antes de conectar — e de novo a cada
+  redirect seguido. Para inspecionar streams de uma rede interna de propósito:
+  `ALLOW_PRIVATE_PROXY=1 node server.js` (de novo, só em rede confiável). As
+  respostas do proxy **não** trazem `Access-Control-Allow-Origin`, então
+  nenhum site externo consegue ler o que o proxy buscou por ele.
+- **Endpoints caros/de escrita** (`/resolve`, `/throttle`, `POST /api/history`)
+  recusam requisições de origem externa explícita — defesa contra um site
+  aberto no navegador do usuário acionando essas rotas por engano (CSRF/abuso
+  cross-origin), não uma fronteira de autenticação.
+- Corpo de requisição, tamanho de manifest e linhas de histórico têm teto —
+  defesa em profundidade contra DoS trivial num processo local.
+
+### Onde ficam os dados (histórico)
+
+Por padrão em `~/.stream-inspector/` (fora da pasta do repositório) — override via
+`STREAM_INSPECTOR_DATA_DIR=/algum/caminho node server.js`. Fica fora do clone de
+propósito: uma pasta *dentro* do repositório seria apagada a cada `git clone`/
+checkout novo.
+
+## YouTube (opcional)
+
+URLs do YouTube (`youtube.com/watch`, `youtu.be`, lives) são suportadas através de
+um **resolvedor local** que delega ao [`yt-dlp`](https://github.com/yt-dlp/yt-dlp).
+O sistema **não** decodifica assinaturas do YouTube — apenas chama o yt-dlp (que
+você instala) e consome o JSON que ele produz. Pré-requisitos:
+
+```bash
+pip install yt-dlp       # ou pipx install yt-dlp
+node server.js           # o endpoint /resolve precisa do servidor
+```
+
+- **Ao vivo**: o yt-dlp extrai o master HLS real → o inspetor roda o pipeline
+  completo (variantes, segmentação, container, telemetria, cor) com paridade total.
+- **VOD**: o yt-dlp devolve formatos separados (não há manifest único). As tabelas
+  de vídeo/áudio/legendas são montadas do JSON do yt-dlp (inclusive formatos 4K/HDR
+  adaptativos), e a telemetria/cor/áudio/alertas/QoE rodam reproduzindo o melhor
+  formato **combinado** disponível (progressivo, tipicamente ≤720p). Como a URL de
+  mídia real do YouTube não carrega extensão de arquivo, o player recebe um
+  `mimeType` explícito (derivado do `ext` do yt-dlp) — sem isso o motor nativo do
+  Clappr não consegue selecionar o playback correto.
+
+Uso sujeito aos Termos do YouTube — a ferramenta destina-se a inspeção técnica e a
+responsabilidade é de quem a opera.
+
+## Sobre PSNR/SSIM/VMAF
+
+**PSNR e SSIM estão implementados de verdade** (seção "Qualidade" dentro de
+Cor & HDR) — mas são métricas *com referência*: só fazem sentido quando a
 referência é o **mesmo conteúdo-fonte** usado para codificar o stream. Comparar Big Buck
 Bunny contra um telejornal ao vivo produz números sem significado (mede diferença de
 conteúdo, não perda de qualidade). Use a lista de presets (filmes CC-BY da Blender
@@ -47,158 +191,34 @@ ffmpeg -i distorcido.mp4 -i referencia.mp4 \
   -f null -
 ```
 
-## Como rodar
-
-Requer apenas Node.js (≥16). O core do inspetor não tem dependências externas —
-`node server.js` funciona direto, sem `npm install`:
-
-```bash
-node server.js
-# → http://localhost:8787
-```
-
-Também funciona hospedado como página estática (`public/`), porém **sem o proxy
-de CORS** — nesse modo só é possível inspecionar streams cuja origem envie
-cabeçalhos CORS (`Access-Control-Allow-Origin`).
-
-`npm install` só é necessário para a resolução automática de URLs do Globoplay
-(único recurso que usa uma dependência real, ver seção abaixo) — todo o resto do
-app roda sem ele.
-
-### Backend alternativo em Go
-
-Existe também uma reescrita do backend (`server.js`) em Go, com o mesmo comportamento
-observável: mesmas rotas, mesmos formatos de resposta, mesmas variáveis de ambiente.
-O frontend (`public/`) é o mesmo para as duas versões — ele é servido embedado no
-binário Go via `//go:embed` (`assets.go`), não precisa copiar a pasta separadamente.
-
-```bash
-go run ./cmd/server
-# → http://localhost:8787
-
-# ou, pra gerar um binário único:
-go build -o stream-inspector-server ./cmd/server
-./stream-inspector-server
-```
-
-- Histórico: `modernc.org/sqlite` (driver SQLite 100% Go, sem cgo) — mesmo schema e
-  mesmo `~/.stream-inspector/history.sqlite` (ou `STREAM_INSPECTOR_DATA_DIR`) do
-  server.js; não precisa migrar nada entre as duas versões.
-- Resolução do Globoplay usa `github.com/mxschmitt/playwright-go`, compatível com a
-  MESMA sessão salva (`globoplay-session.json`) do fluxo Node — o login só precisa
-  ser refeito se a sessão expirar, nunca por causa da troca de backend. Pra fazer
-  login pela primeira vez com esta versão: `go run ./cmd/globoplay-login`. O
-  `playwright-go` ainda depende de um passo de instalação único que roda um driver
-  Node por baixo pra baixar o Chromium (`go run github.com/mxschmitt/playwright-go/cmd/playwright install chromium`)
-  — o runtime das requisições fica 100% Go, só o setup inicial toca Node.
-- As duas versões (`server.js` e `go run ./cmd/server`) podem conviver no mesmo
-  checkout — nenhuma delas apaga ou depende de arquivos da outra.
-
-### Segurança / rede
-
-O `server.js` é uma ferramenta local single-user e foi endurecido com isso em mente:
-
-- **Escuta só em `127.0.0.1` por padrão.** Para expor na rede (só faça em rede
-  confiável): `HOST=0.0.0.0 node server.js`.
-- **O proxy `/p/` bloqueia alvos internos** (loopback, `169.254.0.0/16` de metadata
-  de nuvem, faixas privadas). Para inspecionar streams de uma rede interna de
-  propósito: `ALLOW_PRIVATE_PROXY=1 node server.js` (de novo, só em rede confiável).
-  As respostas do proxy **não** trazem `Access-Control-Allow-Origin`, então nenhum
-  site externo consegue ler o que o proxy buscou.
-- **Endpoints caros/de escrita** (`/resolve`, `/resolve-globoplay`, `/throttle`,
-  `POST /api/history`) recusam requisições de origem externa explícita (defesa
-  contra um site aberto no navegador acionar essas rotas).
-- **A sessão do Globoplay** (`globoplay-session.json`, ver local abaixo) contém
-  cookies de autenticação em texto puro; é gravada com modo `600`, fica fora do git
-  e nunca é servida como arquivo estático. Não compartilhe esse arquivo.
-
-### Onde ficam os dados (histórico e sessão do Globoplay)
-
-Por padrão em `~/.stream-inspector/` (fora da pasta do repositório) — override via
-`STREAM_INSPECTOR_DATA_DIR=/algum/caminho node server.js`. É de propósito que essa
-pasta fique fora do clone: como ela guarda credenciais (sessão do Globoplay), nunca
-deve ir pro git, e uma pasta *dentro* do repositório seria apagada a cada
-`git clone`/checkout novo — ficando fora do repo, o histórico e o login do
-Globoplay sobrevivem a qualquer re-clone.
-
-## YouTube (opcional)
-
-URLs do YouTube (`youtube.com/watch`, `youtu.be`, lives) são suportadas através de
-um **resolvedor local** que delega ao [`yt-dlp`](https://github.com/yt-dlp/yt-dlp).
-O sistema **não** decodifica assinaturas do YouTube — apenas chama o yt-dlp (que
-você instala) e consome o JSON que ele produz. Pré-requisitos:
-
-```bash
-pip install yt-dlp       # ou pipx install yt-dlp
-node server.js           # o endpoint /resolve precisa do servidor
-```
-
-- **Ao vivo**: o yt-dlp extrai o master HLS real → o inspetor roda o pipeline
-  completo (variantes, segmentação, container, telemetria, cor) com paridade total.
-- **VOD**: o yt-dlp devolve formatos separados (não há manifest único). As tabelas
-  de vídeo/áudio/legendas são montadas do JSON do yt-dlp (inclusive formatos 4K/HDR
-  adaptativos), e a telemetria/cor/áudio/alertas/QoE rodam reproduzindo o melhor
-  formato **combinado** disponível (progressivo, tipicamente ≤720p).
-
-Uso sujeito aos Termos do YouTube — a ferramenta destina-se a inspeção técnica e a
-responsabilidade é de quem a opera.
-
-## Globoplay (opcional)
-
-URLs do Globoplay (`globoplay.globo.com/.../ao-vivo/<id>/`, por exemplo) são
-suportadas de um jeito diferente do YouTube: o `yt-dlp` não tem suporte a esse
-conteúdo, e a URL do manifest não está no HTML da página — ela só aparece numa
-requisição de rede depois que o player da página carrega e roda seu próprio
-JavaScript. Por isso o resolvedor usa um **navegador Chromium headless de
-verdade** ([Playwright](https://playwright.dev)) para carregar a página e
-escutar a rede até encontrar a URL do manifest (`.m3u8`/`.mpd`).
-
-Conteúdo ao vivo do Globoplay exige uma conta logada (gratuita ou assinante).
-Em vez de pedir para colar cookies manualmente, você faz login **uma única
-vez** numa janela de navegador real que um script abre, e a sessão fica salva
-localmente (nunca é enviada a lugar nenhum além do próprio Globoplay):
-
-```bash
-npm install
-npx playwright install chromium
-node scripts/globoplay-login.js   # abre um Chromium visível — faça login normalmente
-node server.js                    # o endpoint /resolve-globoplay precisa do servidor
-```
-
-A partir daí, colar uma URL do Globoplay e clicar em "Inspecionar" resolve o
-manifest automaticamente e roda o pipeline completo (paridade total com
-qualquer outra URL de manifest). A sessão salva expira com o tempo — quando
-isso acontecer, a UI avisa e basta rodar `node scripts/globoplay-login.js` de
-novo.
-
-**Sem garantias:** o sistema não decodifica DRM/tokens do Globoplay nem tenta
-contornar bloqueios de automação — se a página mudar de estrutura, bloquear
-navegadores headless, ou o conteúdo estiver protegido de um jeito que o
-Playwright não consiga acessar mesmo logado, a resolução falha com uma
-mensagem clara em vez de tentar burlar. Conteúdo com DRM continua podendo ser
-**inspecionado** (estrutura do manifest, variantes, DRM declarado), só não
-**reproduzido** de fato sem uma licença válida.
-
 ## Arquitetura
 
 ```
-server.js                 servidor estático + proxy de CORS (Node puro; Playwright é opcional,
-                           só para /resolve-globoplay)
-scripts/globoplay-login.js login único do Globoplay (salva sessão em ~/.stream-inspector/, fora do repo/git)
+server.js                servidor estático + proxy de CORS (Node puro, zero dependências)
 public/
-  index.html              UI (campo de URL + botão + seções de resultado)
+  index.html              UI (cockpit: menu lateral de 10 seções + quadro de player/telemetria)
   css/style.css           tokens de design (light/dark automático)
+  css/cockpit.css         layout do cockpit (menu lateral + quadro de monitoração)
   js/parsers.js           parsers próprios de M3U8 e MPD → modelo normalizado
+  js/container.js         inspeção binária de segmentos (MPEG-TS PAT/PMT; fMP4 moov/tenc/pssh)
   js/charts.js            gráficos em canvas (séries temporais, curvas, degraus)
-  js/analyzer.js          análise de cor por frame (histogramas RGB/luma, clipping)
+  js/chromaticity.js       diagramas de cromaticidade 2D/3D (CIE 1931 xy / CIE xyY)
+  js/colorspace.js        amostragem WebCodecs + matemática de cor HDR (PQ/HLG/primárias)
+  js/analyzer.js          histogramas RGB/luma, APL, clipping (fallback canvas 2D)
+  js/audiometer.js        VU meter, RMS, espectro, loudness BS.1770-4, true peak
+  js/netmon.js            TTFB/throughput por segmento, breakdown DNS/TCP/TLS, headers de CDN
+  js/qoe.js               startup, rebuffering, trocas de ABR, exportação de sessão
+  js/alerts.js            motor de alertas com thresholds ajustáveis
+  js/quality.js           comparador PSNR/SSIM (canvas + dois <video> sincronizados)
   js/youtube.js           mapeia o JSON do yt-dlp → modelo do inspetor (YouTube)
-  js/globoplay.js         detecção de URL do Globoplay (resolução em si é 100% server-side)
   js/app.js               orquestração: fetch → parse → tabelas → playback → telemetria
-  vendor/clappr/          Clappr core + plugins de playback (hls.js/Shaka) — envelope do player
-  vendor/hls-*.min.js     hls.js, 2 versões (pinada "Globo" + mais recente — trocáveis no combo-box)
+  vendor/clappr/          Clappr core + plugins (MediaControl, hls.js/Shaka playback) — envelope do player
+  vendor/hls-*.min.js     hls.js, 2 versões (produção + mais recente — trocáveis no combo-box)
   vendor/shaka-*.compiled.js  Shaka Player, 2 versões (idem)
   vendor/dash.all.min.js  dash.js — usado só pelo comparador de qualidade PSNR/SSIM, não pelo player principal
   samples/                manifests de exemplo (HLS com HDR/legendas/Atmos; MPD com DRM)
+scripts/color-math-test.js teste headless da matemática de cor HDR (sem navegador)
+cmd/server/, internal/    porta do backend para Go (mesmo comportamento observável do server.js)
 ```
 
 ### Proxy de CORS (`/p/…`)
@@ -208,16 +228,6 @@ Manifests de origens sem CORS são buscados automaticamente via
 URLs **relativas** dos manifests resolverem naturalmente através do proxy;
 URLs **absolutas** internas (variantes, chaves, `BaseURL`, `media=`) são
 reescritas pelo servidor. `HTTP(S)_PROXY` do ambiente é respeitado (túnel CONNECT).
-
-### Análise SDR/HDR
-
-- **Sinalização**: `VIDEO-RANGE` (HLS), CICP `TransferCharacteristics`/`ColourPrimaries`
-  (DASH) e codecs (Dolby Vision, HEVC Main 10) → exibida por variante e em badge.
-- **Capacidade do display**: `dynamic-range`, `color-gamut` e profundidade de cor.
-- **Curvas**: frames são amostrados em canvas e geram histogramas por canal R/G/B e
-  de luminância (Rec.709), além da evolução temporal de APL e clipping.
-  *Limitação documentada na UI*: o canvas entrega pixels 8-bit já tone-mapped pelo
-  navegador — para conteúdo PQ/HLG as curvas refletem o resultado renderizado.
 
 ### Observações
 

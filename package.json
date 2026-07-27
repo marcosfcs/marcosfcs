@@ -9,8 +9,5 @@
   "engines": {
     "node": ">=16"
   },
-  "license": "MIT",
-  "dependencies": {
-    "playwright": "^1.61.1"
-  }
+  "license": "MIT"
 }

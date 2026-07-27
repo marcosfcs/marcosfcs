@@ -1,9 +1,9 @@
 // Stream Inspector — servidor estático + proxy de CORS, em Go.
 //
 // Porta 1:1 de server.js: frontend embedado (public/), proxy /p/ com
-// bloqueio de SSRF, throttle, histórico persistente (SQLite), resolução de
-// YouTube (yt-dlp) e Globoplay (Playwright) — mesmas rotas, mesmos formatos
-// de resposta, mesmas variáveis de ambiente.
+// bloqueio de SSRF, throttle, histórico persistente (SQLite) e resolução de
+// YouTube (yt-dlp) — mesmas rotas, mesmos formatos de resposta, mesmas
+// variáveis de ambiente.
 //
 //	go run ./cmd/server            → http://localhost:8787
 //	PORT=3000 go run ./cmd/server  → porta customizada
@@ -13,7 +13,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	assets "stream-inspector"
 	"stream-inspector/internal/history"
@@ -37,17 +36,11 @@ func main() {
 	}
 
 	hist := history.Open()
-	dataDir, err := history.DataDir()
-	if err != nil {
-		log.Fatal(err)
-	}
-	globoplay := &resolve.GloboplayResolver{SessionPath: filepath.Join(dataDir, "globoplay-session.json")}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /p/", http.HandlerFunc(proxy.Handler))
 	mux.HandleFunc("GET /throttle", withSameOriginGuard(proxy.ThrottleHandler))
 	mux.HandleFunc("GET /resolve", withSameOriginGuard(resolve.YouTubeHandler))
-	mux.HandleFunc("GET /resolve-globoplay", withSameOriginGuard(globoplay.Handler))
 	// POST /api/history muda estado (grava) → guard de mesma-origem, igual a
 	// server.js:808-811. GET /api/history é só leitura, sem guard, igual a
 	// server.js:832.

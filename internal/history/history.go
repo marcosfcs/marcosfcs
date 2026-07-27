@@ -26,10 +26,9 @@ var MaxRows = 500
 // telemetria inteira (server.js:HISTORY_BODY_MAX_BYTES).
 const bodyMaxBytes = 2 * 1024 * 1024
 
-// DataDir resolve o mesmo local usado pelo server.js (e por
-// scripts/globoplay-login.js): $HOME/.stream-inspector por padrão, ou
-// STREAM_INSPECTOR_DATA_DIR — de propósito fora do repositório, pra
-// sobreviver a qualquer novo `git clone`.
+// DataDir resolve o mesmo local usado pelo server.js: $HOME/.stream-inspector
+// por padrão, ou STREAM_INSPECTOR_DATA_DIR — de propósito fora do
+// repositório, pra sobreviver a qualquer novo `git clone`.
 func DataDir() (string, error) {
 	if v := os.Getenv("STREAM_INSPECTOR_DATA_DIR"); v != "" {
 		return v, nil

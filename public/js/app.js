@@ -2033,44 +2033,6 @@ async function inspectYouTube(url) {
   return true;
 }
 
-/**
- * Resolve uma URL do Globoplay via yt-dlp local (mesmo endpoint /resolve
- * usado para YouTube) e delega ao pipeline de manifest normal — diferente
- * do YouTube, aqui não há um modelo "progressivo" próprio: conteúdo de
- * emissora normalmente expõe um manifest HLS/DASH de verdade (ao vivo ou
- * VOD), então o caminho é sempre achar esse manifest e chamar inspect() com
- * ele (paridade total: variantes, segmentação, container e telemetria
- * reais). Se exigir login/assinatura ou tiver DRM que o yt-dlp não consiga
- * contornar, a resolução falha aqui mesmo — sem tentativa de bypass.
- */
-async function inspectGloboplay(url) {
-  logEvent('URL do Globoplay detectada — resolvendo via navegador headless local (Playwright).');
-  setStatus('Abrindo um Chromium headless para localizar o manifest (pode levar alguns segundos)…', 'busy');
-
-  let body;
-  try {
-    const r = await fetch('/resolve-globoplay?url=' + encodeURIComponent(url));
-    body = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      let hint = '';
-      if (body.code === 'NO_SESSION' || body.code === 'SESSION_EXPIRED') {
-        hint = ' Rode "node scripts/globoplay-login.js" (login manual único) e tente de novo.';
-      } else if (body.code === 'NO_PLAYWRIGHT') {
-        hint = ' Rode "npm install" e "npx playwright install chromium".';
-      }
-      setStatus((body.error || `HTTP ${r.status}`) + hint, 'error');
-      return true;
-    }
-  } catch (e) {
-    setStatus('Falha ao chamar o resolvedor local (/resolve-globoplay requer o server.js): ' + e.message, 'error');
-    return true;
-  }
-
-  logEvent(`Globoplay: manifest ${body.type === 'dash' ? 'DASH' : 'HLS'} localizado — usando o pipeline de inspeção completo.`);
-  await inspect(body.manifestUrl);
-  return true;
-}
-
 async function inspect(url) {
   const btn = $('#btn-run');
   btn.disabled = true;
@@ -2090,12 +2052,6 @@ async function inspect(url) {
       const handled = await inspectYouTube(url);
       if (handled) return;
     }
-    // Globoplay: mesma ideia, mas sempre delega ao pipeline de manifest normal
-    if (window.StreamGloboplay && StreamGloboplay.isGloboplayUrl(url)) {
-      const handled = await inspectGloboplay(url);
-      if (handled) return;
-    }
-
     const { text, effectiveUrl, proxied } = await fetchManifest(url);
     const type = detectType(url, text);
     logEvent(`Manifest carregado ${proxied ? 'via proxy local' : 'diretamente'} (${text.length.toLocaleString('pt-BR')} bytes).`);
