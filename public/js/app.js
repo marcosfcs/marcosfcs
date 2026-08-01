@@ -561,6 +561,114 @@ async function probeContainer(protocol, hlsMediaModel, dashModel) {
   }
 }
 
+function fmtBytes(n) {
+  if (n == null || isNaN(n)) return '—';
+  if (n >= 1024) return (n / 1024).toFixed(1).replace('.', ',') + ' KB';
+  return Math.round(n) + ' bytes';
+}
+
+/**
+ * Análise de codificação de vídeo (keyframe/GOP) — nível de CONTAINER, não
+ * decodifica o vídeo. Roda de forma independente de probeContainer (busca
+ * seus próprios bytes, inclusive um init segment próprio quando precisa da
+ * track de vídeo) de propósito — desacoplada, sem estado compartilhado
+ * entre chamadas assíncronas de call sites diferentes. Suporta HLS
+ * (fMP4/CMAF via moof/traf/trun, ou MPEG-TS legado via PES/adaptation
+ * field) e DASH (mesmo parser fMP4). Não suporta ainda MP4 progressivo não
+ * fragmentado (YouTube) — usa stbl/stss, um conjunto de boxes diferente.
+ */
+async function probeEncoding(protocol, hlsMediaModel, dashModel) {
+  renderKV($('#encoding-overview'), { 'Status': 'Buscando segmento de mídia…' });
+  $('#encoding-summary').innerHTML = '';
+  $('#encoding-note').textContent = '';
+
+  try {
+    let mediaUrl = null, kind = null; // 'fmp4' | 'ts'
+    let videoTrackId = null, timescale = null;
+
+    if (protocol === 'HLS' && hlsMediaModel && hlsMediaModel.maps && hlsMediaModel.maps.length &&
+        hlsMediaModel.segments && hlsMediaModel.segments.length) {
+      kind = 'fmp4';
+      mediaUrl = hlsMediaModel.segments[0].uri;
+      const { buf: initBuf } = await fetchBytes(hlsMediaModel.maps[0], 2 * 1024 * 1024);
+      const videoTrack = C.parseFmp4Container(initBuf).tracks.find((t) => t.handlerType === 'vide');
+      if (videoTrack) { videoTrackId = videoTrack.trackId; timescale = videoTrack.timescale; }
+    } else if (protocol === 'HLS' && hlsMediaModel && hlsMediaModel.segments && hlsMediaModel.segments.length) {
+      kind = 'ts';
+      mediaUrl = hlsMediaModel.segments[0].uri;
+    } else if (protocol === 'DASH' && dashModel) {
+      const v0 = (dashModel.video || [])[0];
+      if (v0 && v0.mediaUrl0) {
+        kind = 'fmp4';
+        mediaUrl = v0.mediaUrl0;
+        if (v0.initUrl && typeof v0.initUrl === 'string') {
+          const { buf: initBuf } = await fetchBytes(v0.initUrl, 2 * 1024 * 1024);
+          const videoTrack = C.parseFmp4Container(initBuf).tracks.find((t) => t.handlerType === 'vide');
+          if (videoTrack) { videoTrackId = videoTrack.trackId; timescale = videoTrack.timescale; }
+        }
+      }
+    }
+
+    if (!mediaUrl) {
+      renderKV($('#encoding-overview'), {
+        'Status': 'Não foi possível localizar um segmento de mídia pra analisar (protocolo/formato não suportado nesta versão — ver nota do painel).',
+      });
+      return;
+    }
+
+    const MAX_BYTES = 8 * 1024 * 1024;
+    const { buf, proxied } = await fetchBytes(mediaUrl, MAX_BYTES);
+    const truncated = buf.byteLength >= MAX_BYTES;
+
+    let stats = null;
+    if (kind === 'fmp4') {
+      const samples = C.parseFmp4MediaSegment(buf, videoTrackId);
+      stats = C.computeGopStats(samples, timescale || 90000);
+    } else if (kind === 'ts') {
+      const tsInfo = C.parseTsContainer(buf);
+      const videoStream = tsInfo.streams.find((s) => /H\.26[45]/.test(s.streamTypeName));
+      if (videoStream) {
+        const samples = C.framesToSamples(C.parseTsVideoFrames(buf, videoStream.pid));
+        stats = C.computeGopStats(samples, 90000);
+      }
+    }
+
+    if (!stats) {
+      renderKV($('#encoding-overview'), {
+        'Status': 'Segmento buscado, mas não foi possível extrair amostras de vídeo (nenhuma track/PID de vídeo reconhecido nos bytes lidos).',
+      });
+      return;
+    }
+
+    renderKV($('#encoding-overview'), {
+      'Amostra': mediaUrl.split('/').pop(),
+      'Obtido via': proxied ? 'proxy local (/p/)' : 'fetch direto',
+      'Bytes lidos': buf.byteLength.toLocaleString('pt-BR') + (truncated ? ' (truncado no limite de 8 MB)' : ''),
+      'Amostras (frames) analisadas': stats.totalSamples,
+      'Segmento inicia com keyframe': stats.startsWithKeyframe ? 'Sim' : 'Não',
+    });
+
+    if (!state.charts.gop) state.charts.gop = new window.GopBarChart($('#encoding-gop-chart'), { height: 120 });
+    state.charts.gop.setSamples(stats.samples);
+
+    renderKV($('#encoding-summary'), {
+      'Nº de GOPs medidos': stats.gopCount,
+      'Duração média de GOP': stats.avgGopSeconds != null
+        ? `${stats.avgGopSeconds.toFixed(2).replace('.', ',')}s (${stats.avgGopFrames.toFixed(1).replace('.', ',')} frames)` : '—',
+      'Duração de GOP (mín/máx)': stats.minGopSeconds != null
+        ? `${stats.minGopSeconds.toFixed(2).replace('.', ',')}s / ${stats.maxGopSeconds.toFixed(2).replace('.', ',')}s` : '—',
+      'Tamanho médio de keyframe': fmtBytes(stats.avgKeyframeSize),
+      'Tamanho médio de não-keyframe': fmtBytes(stats.avgNonKeyframeSize),
+    });
+
+    $('#encoding-note').textContent = kind === 'ts'
+      ? 'Tamanho de frame aproximado pelos bytes entre pacotes PES consecutivos no PID de vídeo (MPEG-TS) — não há campo de tamanho por amostra nesse container, ao contrário do fMP4.'
+      : 'Tamanho e duração de cada frame lidos diretamente de trun.sample_size/sample_duration (fMP4 fragmentado) — dado oficial do container, não estimado.';
+  } catch (e) {
+    renderKV($('#encoding-overview'), { 'Status': 'Erro ao buscar/analisar o segmento: ' + e.message });
+  }
+}
+
 /* ================================================================ *
  * Playback + telemetria
  * ================================================================ */
@@ -2126,6 +2234,8 @@ async function inspect(url) {
 
     // Container real — não bloqueia o restante da UI
     probeContainer(model.protocol, resolvedMediaModel, model.protocol === 'DASH' ? model : null);
+    // Codificação de vídeo (keyframe/GOP) — idem, não bloqueia
+    probeEncoding(model.protocol, resolvedMediaModel, model.protocol === 'DASH' ? model : null);
 
     // Marcadores de anúncio (SCTE-35) — do manifest (media playlist HLS ou MPD DASH)
     const adBreaks = (resolvedMediaModel && resolvedMediaModel.adBreaks) || model.adBreaks || [];

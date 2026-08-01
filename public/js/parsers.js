@@ -546,6 +546,13 @@ function parseMPD(xmlText, baseUrl) {
             sar: inheritedAttr(repEl, asEl, 'sar'),
             segInfo,
             initUrl: resolveInitUrl(segInfo, id, bw, baseUrl),
+            // URL do primeiro segmento de MÍDIA (com amostras) — pra análise
+            // de codificação/GOP, que precisa de bytes reais, não só do init.
+            mediaUrl0: resolveMediaSegmentUrl(
+              segInfo, id, bw, segInfo.startNumber || 1,
+              (segInfo.timeline && segInfo.timeline[0] ? segInfo.timeline[0].t || 0 : 0),
+              baseUrl
+            ),
           });
         } else if (contentType === 'audio' || codecs.some(isAudioCodec)) {
           const ch = repEl.querySelector('AudioChannelConfiguration') || asEl.querySelector('AudioChannelConfiguration');
@@ -631,6 +638,7 @@ function extractSegmentInfo(asEl) {
       startNumber: Number(tpl.getAttribute('startNumber') || 1),
       timeline: entries,
       initTemplate: tpl.getAttribute('initialization') || null,
+      mediaTemplate: tpl.getAttribute('media') || null,
     };
   }
   const segList = asEl.querySelector('SegmentList');
@@ -658,6 +666,22 @@ function resolveInitUrl(segInfo, repId, bandwidth, baseUrl) {
   if (segInfo.initUrlList) return resolveUrl(segInfo.initUrlList, baseUrl);
   if (segInfo.initRange) return { sameFile: true, range: segInfo.initRange };
   return null;
+}
+
+/**
+ * Substitui $RepresentationID$/$Bandwidth$/$Number$/$Time$ no template de
+ * mídia do SegmentTemplate (diferente de resolveInitUrl, que resolve só o
+ * segmento de INICIALIZAÇÃO) e resolve contra baseUrl — usado pra buscar um
+ * segmento de mídia real (com amostras) pra análise de codificação/GOP.
+ */
+function resolveMediaSegmentUrl(segInfo, repId, bandwidth, number, time, baseUrl) {
+  if (!segInfo || !segInfo.mediaTemplate) return null;
+  const uri = segInfo.mediaTemplate
+    .replace(/\$RepresentationID\$/g, repId)
+    .replace(/\$Bandwidth\$/g, bandwidth != null ? String(bandwidth) : '')
+    .replace(/\$Number(%0(\d+)d)?\$/g, (_, __, width) => String(number).padStart(width ? Number(width) : 1, '0'))
+    .replace(/\$Time(%0(\d+)d)?\$/g, (_, __, width) => String(time).padStart(width ? Number(width) : 1, '0'));
+  return resolveUrl(uri, baseUrl);
 }
 
 function segmentsFromDash(segInfo, mediaDuration, live) {
@@ -691,4 +715,4 @@ function segmentsFromDash(segInfo, mediaDuration, live) {
   };
 }
 
-window.StreamParsers = { parseM3U8, parseMPD, codecName, fmtBits, fmtDur, parseAttrs };
+window.StreamParsers = { parseM3U8, parseMPD, codecName, fmtBits, fmtDur, parseAttrs, resolveMediaSegmentUrl };

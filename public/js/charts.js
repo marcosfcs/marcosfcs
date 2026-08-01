@@ -424,6 +424,73 @@ function fmtClockShort(sec) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/**
+ * Estrutura de GOP: uma barra fina por amostra (frame), altura proporcional
+ * ao tamanho em bytes, destacando keyframes numa cor diferente — o mesmo
+ * tipo de visualização usado em ferramentas como StreamEye/Elecard.
+ */
+class GopBarChart {
+  constructor(container, opts) {
+    this.container = container;
+    this.opts = Object.assign({ height: 120 }, opts);
+    this.samples = [];
+    container.classList.add('chart-box');
+    this.canvas = document.createElement('canvas');
+    this.canvas.className = 'chart-canvas';
+    this.canvas.style.height = this.opts.height + 'px';
+    container.appendChild(this.canvas);
+    this.ctx = this.canvas.getContext('2d');
+    this._ro = new ResizeObserver(() => this.draw());
+    this._ro.observe(container);
+    this._mq = matchMedia('(prefers-color-scheme: dark)');
+    this._mqHandler = () => this.draw();
+    this._mq.addEventListener('change', this._mqHandler);
+    this.draw();
+  }
+
+  destroy() {
+    this._ro.disconnect();
+    this._mq.removeEventListener('change', this._mqHandler);
+    this.container.innerHTML = '';
+    this.container.classList.remove('chart-box');
+  }
+
+  setSamples(samples) {
+    this.samples = samples || [];
+    this.draw();
+  }
+
+  draw() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.container.clientWidth;
+    const h = this.opts.height;
+    if (this.canvas.width !== Math.round(w * dpr) || this.canvas.height !== Math.round(h * dpr)) {
+      this.canvas.width = Math.round(w * dpr);
+      this.canvas.height = Math.round(h * dpr);
+      this.canvas.style.width = w + 'px';
+    }
+    const ctx = this.ctx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    if (!this.samples.length) return;
+    const maxSize = Math.max(...this.samples.map((s) => s.size || 0), 1);
+    const keyColor = cssVar('--accent');
+    const otherColor = cssVar('--text-faint');
+    const n = this.samples.length;
+    const gap = 1;
+    const barW = Math.max(1, w / n - gap);
+
+    this.samples.forEach((s, i) => {
+      const barH = Math.max(1, ((s.size || 0) / maxSize) * (h - 4));
+      const x = (i / n) * w;
+      ctx.fillStyle = s.keyframe ? keyColor : otherColor;
+      ctx.fillRect(x, h - barH, barW, barH);
+    });
+  }
+}
+
 window.LineChart = LineChart;
 window.BufferTimeline = BufferTimeline;
+window.GopBarChart = GopBarChart;
 window.cssVar = cssVar;

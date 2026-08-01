@@ -126,12 +126,13 @@
       <button type="button" data-nav="legendas"><span class="nav-num">04</span> Legendas &amp; DRM</button>
       <button type="button" data-nav="segmentacao"><span class="nav-num">05</span> Segmentação</button>
       <div class="nav-group">Análise</div>
-      <button type="button" data-nav="telemetria"><span class="nav-num">06</span> Telemetria &amp; rede</button>
-      <button type="button" data-nav="audiovivo"><span class="nav-num">07</span> Áudio ao vivo</button>
-      <button type="button" data-nav="cor"><span class="nav-num">08</span> Cor &amp; HDR</button>
-      <button type="button" data-nav="qoe"><span class="nav-num">09</span> QoE</button>
+      <button type="button" data-nav="encoding"><span class="nav-num">06</span> Codificação de vídeo</button>
+      <button type="button" data-nav="telemetria"><span class="nav-num">07</span> Telemetria &amp; rede</button>
+      <button type="button" data-nav="audiovivo"><span class="nav-num">08</span> Áudio ao vivo</button>
+      <button type="button" data-nav="cor"><span class="nav-num">09</span> Cor &amp; HDR</button>
+      <button type="button" data-nav="qoe"><span class="nav-num">10</span> QoE</button>
       <div class="nav-group">Sessões</div>
-      <button type="button" data-nav="historico"><span class="nav-num">10</span> Histórico de testes</button>
+      <button type="button" data-nav="historico"><span class="nav-num">11</span> Histórico de testes</button>
     </nav>
 
     <div class="detail-col">
@@ -303,6 +304,25 @@
               ou <code>EventStream</code> (DASH). Complementa (não substitui) o PID SCTE-35 já detectado na inspeção de container.</p>
             <div id="adbreaks-table"></div>
           </section>
+        </div>
+
+        <div class="panel" data-panel="encoding" hidden>
+          <h2>Codificação de vídeo <span class="badge badge-info">inspeção binária</span></h2>
+          <p class="note">Keyframe/GOP extraídos de um segmento de mídia real (não do manifest) — nível de <em>container</em>:
+            lê o que o próprio formato já declara sobre cada amostra (<code>trun.sample_flags</code> no fMP4 fragmentado,
+            <code>random_access_indicator</code> no MPEG-TS), sem decodificar o vídeo.</p>
+          <div id="encoding-overview"></div>
+          <h3>Estrutura de GOP <span class="hint">(barra = 1 frame; altura ∝ tamanho; destaque = keyframe)</span></h3>
+          <div id="encoding-gop-chart"></div>
+          <div id="encoding-summary"></div>
+          <details>
+            <summary>Sobre este método ▾</summary>
+            <p class="note">Identifica corretamente keyframe vs. não-keyframe (e portanto a estrutura de GOP), mas não
+              distingue frames P de B — o container só declara "depende de outra amostra" ou não, não o tipo exato de
+              predição. Para MPEG-TS, o tamanho de cada frame é aproximado pelos bytes entre início de pacotes PES
+              consecutivos no PID de vídeo, e a duração usa o PTS decodificado do cabeçalho PES.</p>
+            <p id="encoding-note" class="note"></p>
+          </details>
         </div>
 
         <div class="panel" data-panel="telemetria" hidden>
