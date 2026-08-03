@@ -193,14 +193,34 @@ ffmpeg -i distorcido.mp4 -i referencia.mp4 \
 
 ## Arquitetura
 
+Duas implementações do mesmo backend convivem no repositório — **Node** (`server.js`,
+raiz) e **Go** (`cmd/server/` + `internal/`) — servindo o mesmo `public/`, com as
+mesmas rotas e o mesmo comportamento observável. Não é preciso escolher uma: rode
+qualquer uma das duas, ou as duas ao mesmo tempo em portas diferentes.
+
+| Caminho | O que é |
+|---|---|
+| `server.js` | Backend em **Node puro** (zero dependências) — servidor estático + proxy de CORS (`/p/…`), resolução de YouTube via `yt-dlp`, histórico via `node:sqlite`. Ponto de entrada de `npm start`/`node server.js`. |
+| `public/` | Todo o frontend (HTML/CSS/JS vanilla, sem framework nem build step) — servido tanto pelo `server.js` quanto embedado no binário Go. Ver detalhamento completo abaixo. |
+| `cmd/server/` | Ponto de entrada do backend em **Go** (`main.go`) — monta as rotas HTTP e liga os pacotes de `internal/`; equivalente a `server.js`, mesmas rotas e variáveis de ambiente. |
+| `internal/` | Pacotes Go que implementam o backend, um por responsabilidade: `proxy/` (proxy de CORS + reescrita de manifest), `security/` (bloqueio de SSRF, guard de mesma-origem), `resolve/` (resolução de YouTube via `yt-dlp`), `history/` (persistência SQLite), `static/` (serve o `public/` embedado). Cada um é o equivalente direto de uma seção do `server.js`. |
+| `assets.go` | `//go:embed` que empacota `public/` inteiro dentro do binário Go — é por isso que `go build` gera um único executável sem precisar copiar a pasta `public/` junto. |
+| `scripts/` | Testes headless (Node puro, sem navegador) da matemática mais sensível a erro de offset/bit: `color-math-test.js` (normalização PQ/HLG, conversão de primárias) e `encoding-gop-test.js` (parsing de boxes fMP4/`trun` e pacotes MPEG-TS/PES para keyframe e GOP). |
+| `go.mod` / `go.sum` | Dependências do backend Go (hoje só `modernc.org/sqlite`, driver SQLite 100% Go sem cgo, + suas dependências transitivas). |
+| `package.json` / `package-lock.json` | Metadados do projeto Node — o core do `server.js` não tem dependências de runtime; nada aqui é necessário para `node server.js` funcionar. |
+| `.gitignore` | Exclui `node_modules/`, logs e o binário compilado do Go (`stream-inspector-server`) do controle de versão. |
+| `README.md` | Este arquivo. |
+
+### `public/` em detalhe
+
 ```
 server.js                servidor estático + proxy de CORS (Node puro, zero dependências)
 public/
-  index.html              UI (cockpit: menu lateral de 10 seções + quadro de player/telemetria)
+  index.html              UI (cockpit: menu lateral de 11 seções + quadro de player/telemetria)
   css/style.css           tokens de design (light/dark automático)
   css/cockpit.css         layout do cockpit (menu lateral + quadro de monitoração)
   js/parsers.js           parsers próprios de M3U8 e MPD → modelo normalizado
-  js/container.js         inspeção binária de segmentos (MPEG-TS PAT/PMT; fMP4 moov/tenc/pssh)
+  js/container.js         inspeção binária de segmentos (MPEG-TS PAT/PMT; fMP4 moov/tenc/pssh; moof/traf/trun e PES para keyframe/GOP)
   js/charts.js            gráficos em canvas (séries temporais, curvas, degraus)
   js/chromaticity.js       diagramas de cromaticidade 2D/3D (CIE 1931 xy / CIE xyY)
   js/colorspace.js        amostragem WebCodecs + matemática de cor HDR (PQ/HLG/primárias)
@@ -217,7 +237,8 @@ public/
   vendor/shaka-*.compiled.js  Shaka Player, 2 versões (idem)
   vendor/dash.all.min.js  dash.js — usado só pelo comparador de qualidade PSNR/SSIM, não pelo player principal
   samples/                manifests de exemplo (HLS com HDR/legendas/Atmos; MPD com DRM)
-scripts/color-math-test.js teste headless da matemática de cor HDR (sem navegador)
+scripts/color-math-test.js    teste headless da matemática de cor HDR (sem navegador)
+scripts/encoding-gop-test.js  teste headless do parsing de keyframe/GOP (fMP4 trun + TS/PES, sem navegador)
 cmd/server/, internal/    porta do backend para Go (mesmo comportamento observável do server.js)
 ```
 
