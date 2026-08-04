@@ -1,9 +1,8 @@
 // Stream Inspector — servidor estático + proxy de CORS, em Go.
 //
 // Porta 1:1 de server.js: frontend embedado (public/), proxy /p/ com
-// bloqueio de SSRF, throttle, histórico persistente (SQLite) e resolução de
-// YouTube (yt-dlp) — mesmas rotas, mesmos formatos de resposta, mesmas
-// variáveis de ambiente.
+// bloqueio de SSRF, throttle e histórico persistente (SQLite) — mesmas
+// rotas, mesmos formatos de resposta, mesmas variáveis de ambiente.
 //
 //	go run ./cmd/server            → http://localhost:8787
 //	PORT=3000 go run ./cmd/server  → porta customizada
@@ -17,7 +16,6 @@ import (
 	assets "stream-inspector"
 	"stream-inspector/internal/history"
 	"stream-inspector/internal/proxy"
-	"stream-inspector/internal/resolve"
 	"stream-inspector/internal/security"
 	"stream-inspector/internal/static"
 )
@@ -40,7 +38,6 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("GET /p/", http.HandlerFunc(proxy.Handler))
 	mux.HandleFunc("GET /throttle", withSameOriginGuard(proxy.ThrottleHandler))
-	mux.HandleFunc("GET /resolve", withSameOriginGuard(resolve.YouTubeHandler))
 	// POST /api/history muda estado (grava) → guard de mesma-origem, igual a
 	// server.js:808-811. GET /api/history é só leitura, sem guard, igual a
 	// server.js:832.
@@ -87,7 +84,7 @@ func withMethodGate(next http.Handler) http.Handler {
 
 // withSameOriginGuard bloqueia endpoints caros/que mudam estado quando
 // acionados por uma origem externa explícita — igual ao guard em
-// server.js:818-831 (isSameOrigin antes de handleThrottle/handleResolve*/POST /api/history).
+// server.js:818-831 (isSameOrigin antes de handleThrottle/POST /api/history).
 func withSameOriginGuard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !security.IsSameOrigin(r) {

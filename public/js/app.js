@@ -71,7 +71,7 @@ const state = {
  *
  * hls.js e Shaka são carregados dinamicamente (não mais via <script>
  * estático) porque agora existem 2 versões de cada um lado a lado
- * (a "da Globo", usada em produção, e a mais recente do GitHub) e só uma
+ * (a usada em produção, e a mais recente do GitHub) e só uma
  * pode ocupar window.Hls/window.shaka por vez. Trocar de motor no
  * combo-box troca esse global e reexecuta o plugin de playback do Clappr
  * (hlsjs-playback/dash-shaka-playback), que capturam window.Hls/window.shaka
@@ -80,9 +80,9 @@ const state = {
  * ================================================================ */
 
 const ENGINE_BUNDLES = {
-  'hls-1.5.14': { kind: 'hls', src: 'vendor/hls-1.5.14.min.js', label: 'HLS.js 1.5.14 (Globo)' },
+  'hls-1.5.14': { kind: 'hls', src: 'vendor/hls-1.5.14.min.js', label: 'HLS.js 1.5.14 (produção)' },
   'hls-1.6.16': { kind: 'hls', src: 'vendor/hls-1.6.16.min.js', label: 'HLS.js 1.6.16 (mais recente)' },
-  'shaka-3.1.8': { kind: 'shaka', src: 'vendor/shaka-3.1.8.compiled.js', label: 'Shaka Player 3.1.8 (Globo)' },
+  'shaka-3.1.8': { kind: 'shaka', src: 'vendor/shaka-3.1.8.compiled.js', label: 'Shaka Player 3.1.8 (produção)' },
   'shaka-5.2.2': { kind: 'shaka', src: 'vendor/shaka-5.2.2.compiled.js', label: 'Shaka Player 5.2.2 (mais recente)' },
 };
 
@@ -494,7 +494,7 @@ async function probeContainer(protocol, hlsMediaModel, dashModel) {
 
   let sampleUrl = null, kindHint = null;
   if (protocol === 'directUrl' && hlsMediaModel) {
-    sampleUrl = hlsMediaModel;   // string com a URL de mídia direta (YouTube progressivo)
+    sampleUrl = hlsMediaModel;   // string com a URL de mídia progressiva direta
     kindHint = 'fmp4';
   } else if (protocol === 'HLS' && hlsMediaModel) {
     if (hlsMediaModel.maps && hlsMediaModel.maps.length) { sampleUrl = hlsMediaModel.maps[0]; kindHint = 'fmp4'; }
@@ -575,7 +575,7 @@ function fmtBytes(n) {
  * entre chamadas assíncronas de call sites diferentes. Suporta HLS
  * (fMP4/CMAF via moof/traf/trun, ou MPEG-TS legado via PES/adaptation
  * field) e DASH (mesmo parser fMP4). Não suporta ainda MP4 progressivo não
- * fragmentado (YouTube) — usa stbl/stss, um conjunto de boxes diferente.
+ * fragmentado — usa stbl/stss, um conjunto de boxes diferente.
  */
 async function probeEncoding(protocol, hlsMediaModel, dashModel) {
   renderKV($('#encoding-overview'), { 'Status': 'Buscando segmento de mídia…' });
@@ -1001,7 +1001,7 @@ function startTelemetry(model, isLive) {
   state.alertEngine = setupAlertEngine(model, isLive);
 
   // Rede real via Resource Timing API — independente do motor, cobre a
-  // lacuna do Shaka (sem TTFB próprio) e o progressivo do YouTube.
+  // lacuna do Shaka (sem TTFB próprio) e o playback progressivo direto.
   state.resTimingMon = new ResourceTimingMonitor((s) => {
     const t = (performance.now() - state.t0) / 1000;
     if (s.detailAvailable) {
@@ -1013,7 +1013,7 @@ function startTelemetry(model, isLive) {
 
   // Headers de CDN/edge (+ eco de CMCD/CMSD) — só chega dado quando o
   // tráfego passa pelo proxy local ou a origem expõe via CORS; não
-  // alcança o <video src> nativo do progressivo do YouTube.
+  // alcança o <video src> nativo do playback progressivo direto.
   state.headerSniffer = new HeaderSniffer((url, headers) => {
     state.cdnHeaders = headers;
     renderCdnTable(url, headers);
@@ -1420,7 +1420,7 @@ function renderLadderPills() {
   const select = $('#ladder-select');
   if (!picker || !select) return;
 
-  // progressivo (YouTube VOD) ou motor sem níveis: esconde o seletor
+  // progressivo (arquivo único) ou motor sem níveis: esconde o seletor
   if (state.playerKind === 'progressive') { picker.hidden = true; return; }
   const lad = getLadder();
   if (!lad) { picker.hidden = true; return; }
@@ -1662,8 +1662,8 @@ function renderTrackPickers() {
  * playback em si) com o motor/versão escolhido no combo-box. HLS usa
  * @clappr/hlsjs-playback (window.HlsjsPlayback); DASH usa dash-shaka-playback
  * (window.DashShakaPlayback), ambos "external" (leem window.Hls/window.shaka
- * já carregados — ver ensureEngineLoaded). Progressivo (YouTube VOD, arquivo
- * único) usa o HTML5Video padrão do próprio Clappr, sem plugin extra.
+ * já carregados — ver ensureEngineLoaded). Progressivo (arquivo único) usa
+ * o HTML5Video padrão do próprio Clappr, sem plugin extra.
  *
  * Depois que o Clappr sobe, `waitForEngineInstance` pega a instância REAL de
  * Hls/shaka.Player por baixo do plugin (`_hls`/`shakaPlayerInstance`) e todo
@@ -1680,8 +1680,8 @@ async function startPlayback(type, url, model, isLive, progressiveMimeType) {
   $('#chroma-method-note').textContent = '';
   state.lastPlay = { type, url, model, isLive, progressiveMimeType };
 
-  // Default do motor por tipo de manifest (HLS→hls.js Globo, DASH→Shaka
-  // Globo) — só na primeira vez; depois que o usuário troca manualmente no
+  // Default do motor por tipo de manifest (HLS→hls.js produção, DASH→Shaka
+  // produção) — só na primeira vez; depois que o usuário troca manualmente no
   // combo-box (state.engineManuallySet), essa escolha é respeitada mesmo
   // trocando de URL/tipo.
   if (type !== 'progressive' && !state.engineManuallySet) {
@@ -1703,7 +1703,7 @@ async function startPlayback(type, url, model, isLive, progressiveMimeType) {
 
   if (type === 'progressive') {
     // sem isso, o Clappr não acha nenhum playback pra fontes sem extensão
-    // reconhecível na URL (caso do YouTube) e não cria vídeo nenhum
+    // reconhecível na URL e não cria vídeo nenhum
     clapprOpts.mimeType = progressiveMimeType || 'video/mp4';
   }
 
@@ -1926,7 +1926,7 @@ async function attachLockedVariant(video, model, variant) {
       player.setQualityFor('video', bestIdx);
     } catch { /* ignore */ }
   } else {
-    // progressivo (YouTube): só há um formato tocável — compara consigo mesmo
+    // progressivo (arquivo único): só há um formato tocável — compara consigo mesmo
     video.src = variant.uri;
   }
   video.play().catch(() => { /* autoplay pode exigir gesto do usuário */ });
@@ -2070,77 +2070,6 @@ function setStatus(msg, kind) {
   s.hidden = !msg;
 }
 
-/**
- * Resolve uma URL do YouTube via /resolve (yt-dlp local) e alimenta o
- * pipeline. Retorna true se tratou a requisição (ao vivo → delega ao
- * fluxo de manifest normal; VOD → renderiza a partir do JSON do yt-dlp
- * e reproduz o melhor formato progressivo).
- */
-async function inspectYouTube(url) {
-  logEvent('URL do YouTube detectada — resolvendo via yt-dlp local (uso sujeito aos Termos do YouTube).');
-  setStatus('Resolvendo com yt-dlp…', 'busy');
-
-  let info;
-  try {
-    const r = await fetch('/resolve?url=' + encodeURIComponent(url));
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      const hint = body.code === 'NO_YTDLP'
-        ? ' Instale o yt-dlp e sirva a página por "node server.js".'
-        : '';
-      setStatus('Não foi possível resolver a URL do YouTube: ' + (body.error || `HTTP ${r.status}`) + hint, 'error');
-      return true;
-    }
-    info = body;
-  } catch (e) {
-    setStatus('Falha ao chamar o resolvedor local (/resolve requer o server.js): ' + e.message, 'error');
-    return true;
-  }
-
-  logEvent(`YouTube: "${info.title || info.id}"${info.uploader ? ' — ' + info.uploader : ''} (${info.is_live ? 'AO VIVO' : 'VOD'}).`);
-  const src = StreamYouTube.pickPlaybackSource(info);
-  if (!src) {
-    setStatus('O yt-dlp não retornou um formato reproduzível para esta URL.', 'error');
-    return true;
-  }
-
-  // Ao vivo (ou fallback HLS): delega ao pipeline de manifest normal —
-  // paridade total (variantes, segmentação, container reais).
-  if (src.kind === 'hls') {
-    logEvent('YouTube ao vivo: master HLS resolvido — usando o pipeline de manifest completo.');
-    await inspect(src.url);
-    return true;
-  }
-
-  // VOD progressivo: tabelas a partir do JSON do yt-dlp + player no arquivo.
-  const model = StreamYouTube.buildModelFromYtInfo(info);
-  $('#results').hidden = false;
-  renderBadges(model);
-  renderKV($('#overview'), { ...model.overview, 'URL': url, 'Formato reproduzido': `${src.height || '—'}p (melhor progressivo combinado)` });
-  $('#raw-manifest').textContent = JSON.stringify(info, null, 2).slice(0, 200000);
-
-  renderTable($('#video-table'), VIDEO_COLUMNS, model.video || [], 'Nenhum formato de vídeo retornado.');
-  populateQualityVariantSelect(model);
-  renderTable($('#audio-table'), AUDIO_COLUMNS, model.audio || [], 'Nenhuma faixa de áudio separada (pode estar muxada nos formatos progressivos).');
-  renderTable($('#subs-table'), SUB_COLUMNS, model.subtitles || [], 'Nenhuma legenda/closed caption retornada.');
-  renderTable($('#drm-table'), DRM_COLUMNS, [], 'Mídia do YouTube — sem DRM aplicável nos formatos entregues pelo yt-dlp.');
-  renderHdrPanel(model);
-  renderSegments(null);
-
-  state.sessionUrl = url;
-  state.sessionOverview = { ...model.overview };
-  state.targetDuration = 6;
-
-  logEvent('Observação: o player usa o melhor formato combinado (progressivo, tipicamente ≤720p); as tabelas listam todos os formatos, inclusive 4K/HDR adaptativos.');
-
-  probeContainer('directUrl', src.url, null);
-  setupTelemetryCharts(false);
-  setStatus('', '');
-  startPlayback('progressive', proxify(src.url), model, false, StreamYouTube.mimeTypeForExt(src.ext));
-  logEvent('Playback iniciado (mudo) a partir do formato progressivo do YouTube.');
-  return true;
-}
-
 async function inspect(url) {
   const btn = $('#btn-run');
   btn.disabled = true;
@@ -2155,11 +2084,6 @@ async function inspect(url) {
   $('#sec-adbreaks').hidden = true;
 
   try {
-    // YouTube: resolve via yt-dlp local antes de tudo
-    if (window.StreamYouTube && StreamYouTube.isYouTubeUrl(url)) {
-      const handled = await inspectYouTube(url);
-      if (handled) return;
-    }
     const { text, effectiveUrl, proxied } = await fetchManifest(url);
     const type = detectType(url, text);
     logEvent(`Manifest carregado ${proxied ? 'via proxy local' : 'diretamente'} (${text.length.toLocaleString('pt-BR')} bytes).`);

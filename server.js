@@ -30,7 +30,6 @@ const fs = require('fs');
 const path = require('path');
 const dns = require('dns');
 const os = require('os');
-const { execFile } = require('child_process');
 
 const PORT = Number(process.env.PORT) || 8787;
 // Escuta só em loopback por padrão: o proxy /p/ e os endpoints de resolução
@@ -60,7 +59,7 @@ let throttleKbps = 0;
  * como arquivo estático (fora de public/) e
  * fica fora do git de qualquer forma. Se node:sqlite não estiver disponível
  * nesta versão do Node, o histórico é desabilitado de forma explícita
- * (mesmo padrão de honestidade usado para yt-dlp/WebCodecs ausentes).
+ * (mesmo padrão de honestidade usado para WebCodecs ausente).
  */
 const DATA_DIR = process.env.STREAM_INSPECTOR_DATA_DIR || path.join(os.homedir(), '.stream-inspector');
 let historyDb = null;
@@ -431,82 +430,6 @@ function handleThrottle(res, search) {
   res.end(JSON.stringify({ throttleKbps }));
 }
 
-/**
- * Resolve uma URL do YouTube em manifest/mídia via yt-dlp LOCAL.
- * O sistema não decodifica assinaturas/DRM — delega inteiramente ao yt-dlp,
- * que o usuário instala (pip install yt-dlp). Restrito a uma allowlist de
- * hosts conhecidos para não virar um resolvedor/downloader genérico.
- */
-const YT_HOSTS = /^(?:www\.|m\.)?(?:youtube\.com|youtube-nocookie\.com|youtu\.be)$/i;
-
-/** decodeURIComponent que nunca lança (retorna '' em %-encoding malformado). */
-function safeDecode(s) {
-  try { return decodeURIComponent(s); } catch { return ''; }
-}
-
-function handleResolve(res, search) {
-  const m = (search || '').match(/[?&]url=([^&]+)/);
-  const url = m ? safeDecode(m[1]) : '';
-  let host;
-  try { host = new URL(url).hostname; } catch { host = null; }
-  if (!host || !YT_HOSTS.test(host)) {
-    res.writeHead(400, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-    return res.end(JSON.stringify({ error: 'URL do YouTube inválida ou host não suportado.' }));
-  }
-
-  execFile(
-    'yt-dlp',
-    ['-J', '--no-warnings', '--no-playlist', url],
-    { timeout: 30000, maxBuffer: 32 * 1024 * 1024 },
-    (err, stdout, stderr) => {
-      if (err && err.code === 'ENOENT') {
-        res.writeHead(501, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-        return res.end(JSON.stringify({
-          error: 'yt-dlp não encontrado. Instale com "pip install yt-dlp" (ou "pipx install yt-dlp") na máquina que roda o server.js.',
-          code: 'NO_YTDLP',
-        }));
-      }
-      if (err) {
-        res.writeHead(502, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-        return res.end(JSON.stringify({
-          error: 'yt-dlp falhou ao resolver a URL.',
-          detail: String(stderr || err.message).split('\n').slice(-4).join(' ').slice(0, 400),
-        }));
-      }
-      let info;
-      try { info = JSON.parse(stdout); } catch (e) {
-        res.writeHead(502, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-        return res.end(JSON.stringify({ error: 'Saída do yt-dlp não é JSON válido.' }));
-      }
-      // repassa só o necessário (o JSON completo é enorme)
-      const slim = {
-        id: info.id, title: info.title, uploader: info.uploader,
-        is_live: !!info.is_live, was_live: !!info.was_live,
-        live_status: info.live_status || null,
-        duration: info.duration || null,
-        webpage_url: info.webpage_url || url,
-        formats: (info.formats || []).map((f) => ({
-          format_id: f.format_id, ext: f.ext, protocol: f.protocol,
-          vcodec: f.vcodec, acodec: f.acodec,
-          width: f.width, height: f.height, fps: f.fps,
-          tbr: f.tbr, vbr: f.vbr, abr: f.abr,
-          audio_channels: f.audio_channels, asr: f.asr,
-          language: f.language, dynamic_range: f.dynamic_range,
-          filesize: f.filesize || f.filesize_approx || null,
-          manifest_url: f.manifest_url || null,
-          url: f.url || null,
-          format_note: f.format_note || null,
-        })),
-        subtitles: Object.keys(info.subtitles || {}),
-        automatic_captions: Object.keys(info.automatic_captions || {}),
-        chapters: (info.chapters || []).map((c) => ({ title: c.title, start_time: c.start_time })),
-      };
-      res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cache-control': 'no-store' });
-      res.end(JSON.stringify(slim));
-    }
-  );
-}
-
 const HISTORY_BODY_MAX_BYTES = 2 * 1024 * 1024; // resumo estático, não a telemetria inteira
 const HISTORY_MAX_ROWS = 500; // teto de linhas guardadas (defesa em profundidade contra DoS de disco)
 
@@ -703,10 +626,6 @@ function routeRequest(req, res) {
   if (urlPath === '/throttle') {
     if (!isSameOrigin(req)) return denyCrossOrigin(res);
     return handleThrottle(res, search);
-  }
-  if (urlPath === '/resolve') {
-    if (!isSameOrigin(req)) return denyCrossOrigin(res);
-    return handleResolve(res, search);
   }
   if (urlPath === '/api/history') return handleHistoryList(res, search);
   return handleStatic(req, res, urlPath);

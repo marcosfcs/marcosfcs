@@ -156,8 +156,8 @@ function looksLikeSegmentUrl(url) {
 /**
  * Observa PerformanceResourceTiming para requisições de segmento —
  * funciona para QUALQUER motor (inclusive Shaka, que não expõe TTFB
- * via API própria, e o `<video src>` progressivo do YouTube, que não
- * tem nenhum hook de rede próprio).
+ * via API própria, e o `<video src>` de playback progressivo direto,
+ * que não tem nenhum hook de rede próprio).
  *
  * Limitação do próprio navegador: para origens cross-origin sem o
  * header `Timing-Allow-Origin`, a spec zera dns/tcp/tls/ttfb (só
@@ -227,7 +227,7 @@ class ResourceTimingMonitor {
  * carregamento do script; um monkeypatch feito depois (ex.: só quando
  * o playback inicia) chegaria tarde demais para essa captura.
  * Funciona com qualquer motor, MAS não alcança o <video src> nativo do
- * progressivo do YouTube (o navegador busca por conta própria).
+ * playback progressivo direto (o navegador busca por conta própria).
  * ================================================================ */
 
 class HeaderSniffer {
