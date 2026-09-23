@@ -164,6 +164,25 @@ node server.js           # o endpoint /resolve precisa do servidor
   `mimeType` explícito (derivado do `ext` do yt-dlp) — sem isso o motor nativo do
   Clappr não consegue selecionar o playback correto.
 
+**Bloqueio anti-bot do YouTube**: o YouTube passou a exigir sessão autenticada
+para boa parte das requisições ("Sign in to confirm you're not a bot"), até em
+vídeos públicos comuns — sem isso o yt-dlp falha mesmo com tudo instalado
+corretamente. Repasse cookies de um navegador onde você já está logado:
+
+```bash
+YTDLP_COOKIES_FROM_BROWSER=chrome node server.js   # ou safari / firefox / edge / brave
+```
+
+Ou, se preferir um arquivo `cookies.txt` exportado (mais portável, não depende
+do navegador estar de pé nem de permissão de acesso ao keychain do SO):
+
+```bash
+YTDLP_COOKIES_FILE=/caminho/cookies.txt node server.js
+```
+
+Vale testar direto pelo terminal antes (`yt-dlp -J --cookies-from-browser chrome "URL"`)
+para confirmar que o próprio yt-dlp resolve com as cookies escolhidas.
+
 Uso sujeito aos Termos do YouTube — a ferramenta destina-se a inspeção técnica e a
 responsabilidade é de quem a opera.
 

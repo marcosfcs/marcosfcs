@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -20,6 +21,20 @@ import (
 var ytHostsRe = regexp.MustCompile(`(?i)^(?:www\.|m\.)?(?:youtube\.com|youtube-nocookie\.com|youtu\.be)$`)
 
 const ytdlpTimeout = 30 * time.Second
+
+// O YouTube passou a bloquear requisições sem sessão autenticada ("Sign in
+// to confirm you're not a bot") — mesmo racional de server.js:ytdlpCookieArgs.
+// Repassa cookies de um navegador local (YTDLP_COOKIES_FROM_BROWSER) ou de um
+// arquivo cookies.txt exportado (YTDLP_COOKIES_FILE) quando configurado.
+func ytdlpCookieArgs() []string {
+	if f := os.Getenv("YTDLP_COOKIES_FILE"); f != "" {
+		return []string{"--cookies", f}
+	}
+	if b := os.Getenv("YTDLP_COOKIES_FROM_BROWSER"); b != "" {
+		return []string{"--cookies-from-browser", b}
+	}
+	return nil
+}
 
 // ytFormat espelha os campos do JSON do yt-dlp que a UI realmente usa —
 // mesma projeção "slim" de server.js:handleResolve (o JSON completo do
@@ -97,7 +112,9 @@ func YouTubeHandler(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), ytdlpTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "yt-dlp", "-J", "--no-warnings", "--no-playlist", raw)
+	args := append([]string{"-J", "--no-warnings", "--no-playlist"}, ytdlpCookieArgs()...)
+	args = append(args, raw)
+	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
 	stdout, err := cmd.Output()
 	if err != nil {
 		var stderr string

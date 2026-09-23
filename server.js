@@ -439,6 +439,20 @@ function handleThrottle(res, search) {
  */
 const YT_HOSTS = /^(?:www\.|m\.)?(?:youtube\.com|youtube-nocookie\.com|youtu\.be)$/i;
 
+// O YouTube passou a bloquear requisições sem sessão autenticada ("Sign in
+// to confirm you're not a bot") — sem isso o yt-dlp falha até em vídeos
+// públicos comuns. Repassa cookies de um navegador local (YTDLP_COOKIES_FROM_BROWSER,
+// ex.: "chrome"/"safari"/"firefox") ou de um arquivo cookies.txt exportado
+// (YTDLP_COOKIES_FILE) quando configurado; sem nenhuma das duas, o yt-dlp
+// roda sem autenticação (comportamento anterior, funciona pra parte dos vídeos).
+const YTDLP_COOKIES_FILE = process.env.YTDLP_COOKIES_FILE || '';
+const YTDLP_COOKIES_FROM_BROWSER = process.env.YTDLP_COOKIES_FROM_BROWSER || '';
+function ytdlpCookieArgs() {
+  if (YTDLP_COOKIES_FILE) return ['--cookies', YTDLP_COOKIES_FILE];
+  if (YTDLP_COOKIES_FROM_BROWSER) return ['--cookies-from-browser', YTDLP_COOKIES_FROM_BROWSER];
+  return [];
+}
+
 /** decodeURIComponent que nunca lança (retorna '' em %-encoding malformado). */
 function safeDecode(s) {
   try { return decodeURIComponent(s); } catch { return ''; }
@@ -456,7 +470,7 @@ function handleResolve(res, search) {
 
   execFile(
     'yt-dlp',
-    ['-J', '--no-warnings', '--no-playlist', url],
+    ['-J', '--no-warnings', '--no-playlist', ...ytdlpCookieArgs(), url],
     { timeout: 30000, maxBuffer: 32 * 1024 * 1024 },
     (err, stdout, stderr) => {
       if (err && err.code === 'ENOENT') {
