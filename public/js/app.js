@@ -271,20 +271,60 @@ function renderKV(container, obj) {
   container.appendChild(table);
 }
 
-function renderTable(container, columns, rows, emptyMsg) {
+/**
+ * opts.sortable habilita cabeçalho clicável nas colunas que tiverem
+ * `sortKey(row)` definido (retorna número/string comparável — não o `get()`
+ * de exibição, que pode vir formatado ou ser um Node). opts.defaultSortIndex/
+ * defaultSortDir aplicam uma ordenação inicial sem precisar clicar. O estado
+ * do clique vive só no closure de cada chamada (re-renderiza a própria
+ * tabela) — uma nova chamada a renderTable (novo dataset) sempre volta pro
+ * default, de propósito.
+ */
+function renderTable(container, columns, rows, emptyMsg, opts) {
+  opts = opts || {};
+  const initialSort = opts.sortable && opts.defaultSortIndex != null
+    ? { index: opts.defaultSortIndex, dir: opts.defaultSortDir || 'asc' }
+    : null;
+  renderSortedTable(container, columns, rows, emptyMsg, opts.sortable, initialSort);
+}
+
+function renderSortedTable(container, columns, rows, emptyMsg, sortable, sort) {
   container.innerHTML = '';
   if (!rows.length) {
     container.appendChild(el('p', 'empty-note', emptyMsg));
     return;
   }
+  const sortedRows = sortable && sort && columns[sort.index] && columns[sort.index].sortKey
+    ? [...rows].sort((a, b) => {
+        const ka = columns[sort.index].sortKey(a);
+        const kb = columns[sort.index].sortKey(b);
+        if (ka == null && kb == null) return 0;
+        if (ka == null) return 1;   // nulo/desconhecido sempre por último
+        if (kb == null) return -1;
+        const cmp = typeof ka === 'string' ? ka.localeCompare(kb, undefined, { numeric: true }) : ka - kb;
+        return sort.dir === 'desc' ? -cmp : cmp;
+      })
+    : rows;
+
   const table = el('table', 'data-table');
   const thead = el('thead');
   const trh = el('tr');
-  for (const c of columns) trh.appendChild(el('th', null, c.label));
+  columns.forEach((c, i) => {
+    const th = el('th', null, c.label);
+    if (sortable && c.sortKey) {
+      th.classList.add('sortable');
+      if (sort && sort.index === i) th.classList.add(sort.dir === 'desc' ? 'sort-desc' : 'sort-asc');
+      th.addEventListener('click', () => {
+        const nextDir = sort && sort.index === i && sort.dir === 'asc' ? 'desc' : 'asc';
+        renderSortedTable(container, columns, rows, emptyMsg, sortable, { index: i, dir: nextDir });
+      });
+    }
+    trh.appendChild(th);
+  });
   thead.appendChild(trh);
   table.appendChild(thead);
   const tbody = el('tbody');
-  for (const row of rows) {
+  for (const row of sortedRows) {
     const tr = el('tr');
     for (const c of columns) {
       const td = el('td');
@@ -325,18 +365,27 @@ function renderBadges(model) {
   }
 }
 
+/** "1920x1080" → 2073600 (pixels totais) — usado só para ordenar, não pra exibir. */
+function resolutionPixels(res) {
+  const m = /^(\d+)x(\d+)$/.exec(res || '');
+  return m ? Number(m[1]) * Number(m[2]) : null;
+}
+
 const VIDEO_COLUMNS = [
-  { label: 'ID', get: (v) => v.id },
-  { label: 'Resolução', get: (v) => v.resolution, num: true },
-  { label: 'Bitrate (pico)', get: (v) => P.fmtBits(v.bandwidth), num: true },
-  { label: 'Bitrate (médio)', get: (v) => P.fmtBits(v.avgBandwidth), num: true },
-  { label: 'FPS', get: (v) => (v.frameRate ? String(Math.round(v.frameRate * 100) / 100) : '—'), num: true },
-  { label: 'Codec de vídeo', get: (v) => v.codecs.filter((c) => isVideo(c)).map(P.codecName).join(', ') || v.codecs.map(P.codecName).join(', ') },
-  { label: 'Codec de áudio', get: (v) => v.codecs.filter((c) => isAudio(c)).map(P.codecName).join(', ') || '—' },
-  { label: 'String de codec', get: (v) => v.codecs.join(', '), mono: true },
-  { label: 'Curva de Cor', get: (v) => rangeCell(v) },
+  { label: 'ID', get: (v) => v.id, sortKey: (v) => v.id ?? '' },
+  { label: 'Resolução', get: (v) => v.resolution, num: true, sortKey: (v) => resolutionPixels(v.resolution) },
+  { label: 'Bitrate (pico)', get: (v) => P.fmtBits(v.bandwidth), num: true, sortKey: (v) => v.bandwidth },
+  { label: 'Bitrate (médio)', get: (v) => P.fmtBits(v.avgBandwidth), num: true, sortKey: (v) => v.avgBandwidth },
+  { label: 'FPS', get: (v) => (v.frameRate ? String(Math.round(v.frameRate * 100) / 100) : '—'), num: true, sortKey: (v) => v.frameRate },
+  { label: 'Codec de vídeo', get: (v) => v.codecs.filter((c) => isVideo(c)).map(P.codecName).join(', ') || v.codecs.map(P.codecName).join(', '), sortKey: (v) => (v.codecs.filter((c) => isVideo(c)).map(P.codecName).join(', ') || v.codecs.map(P.codecName).join(', ')) },
+  { label: 'Codec de áudio', get: (v) => v.codecs.filter((c) => isAudio(c)).map(P.codecName).join(', ') || '—', sortKey: (v) => v.codecs.filter((c) => isAudio(c)).map(P.codecName).join(', ') },
+  { label: 'String de codec', get: (v) => v.codecs.join(', '), mono: true, sortKey: (v) => v.codecs.join(', ') },
+  { label: 'Curva de Cor', get: (v) => rangeCell(v), sortKey: (v) => v.videoRange || '' },
   { label: 'Extras', get: (v) => videoExtras(v) },
 ];
+// Índice 1 = coluna "Resolução" — ordena da maior pra menor por padrão;
+// cabeçalhos com sortKey ficam clicáveis pra reordenar por qualquer coluna.
+const VIDEO_TABLE_OPTS = { sortable: true, defaultSortIndex: 1, defaultSortDir: 'desc' };
 
 function isVideo(c) { return /^(avc|hvc|hev|dvh|dav1|av01|vp0?9)/i.test(c); }
 function isAudio(c) { return /^(mp4a|ac-3|ec-3|ac-4|opus|flac|mp3)/i.test(c); }
@@ -2120,7 +2169,7 @@ async function inspectYouTube(url) {
   renderKV($('#overview'), { ...model.overview, 'URL': url, 'Formato reproduzido': `${src.height || '—'}p (melhor progressivo combinado)` });
   $('#raw-manifest').textContent = JSON.stringify(info, null, 2).slice(0, 200000);
 
-  renderTable($('#video-table'), VIDEO_COLUMNS, model.video || [], 'Nenhum formato de vídeo retornado.');
+  renderTable($('#video-table'), VIDEO_COLUMNS, model.video || [], 'Nenhum formato de vídeo retornado.', VIDEO_TABLE_OPTS);
   populateQualityVariantSelect(model);
   renderTable($('#audio-table'), AUDIO_COLUMNS, model.audio || [], 'Nenhuma faixa de áudio separada (pode estar muxada nos formatos progressivos).');
   renderTable($('#subs-table'), SUB_COLUMNS, model.subtitles || [], 'Nenhuma legenda/closed caption retornada.');
@@ -2178,7 +2227,7 @@ async function inspect(url) {
     renderKV($('#overview'), { ...model.overview, 'SCTE-35': model.overview['SCTE-35'] || 'Verificando…', 'URL': url, 'Obtido via': proxied ? 'proxy local (/p/)' : 'fetch direto' });
     $('#raw-manifest').textContent = text.length > 200000 ? text.slice(0, 200000) + '\n… (truncado)' : text;
 
-    renderTable($('#video-table'), VIDEO_COLUMNS, model.video || [], 'Nenhuma variante de vídeo declarada neste manifest.');
+    renderTable($('#video-table'), VIDEO_COLUMNS, model.video || [], 'Nenhuma variante de vídeo declarada neste manifest.', VIDEO_TABLE_OPTS);
     populateQualityVariantSelect(model);
     renderTable($('#audio-table'), AUDIO_COLUMNS, model.audio || [], 'Nenhuma faixa de áudio alternativa declarada (áudio pode estar muxado no vídeo).');
     renderTable($('#subs-table'), SUB_COLUMNS, [...(model.subtitles || []), ...(model.closedCaptions || [])], 'Nenhuma faixa de legendas/closed captions declarada.');
@@ -2352,7 +2401,7 @@ function restoreHistoryEntry(item) {
   renderBadges(model);
   renderKV($('#overview'), model.overview);
   $('#raw-manifest').textContent = '(manifest bruto não é armazenado no histórico — apenas o resumo estático)';
-  renderTable($('#video-table'), VIDEO_COLUMNS, model.video || [], 'Nenhuma variante de vídeo declarada neste manifest.');
+  renderTable($('#video-table'), VIDEO_COLUMNS, model.video || [], 'Nenhuma variante de vídeo declarada neste manifest.', VIDEO_TABLE_OPTS);
   renderTable($('#audio-table'), AUDIO_COLUMNS, model.audio || [], 'Nenhuma faixa de áudio alternativa declarada (áudio pode estar muxado no vídeo).');
   renderTable($('#subs-table'), SUB_COLUMNS, [...(model.subtitles || []), ...(model.closedCaptions || [])], 'Nenhuma faixa de legendas/closed captions declarada.');
   renderTable($('#drm-table'), DRM_COLUMNS, (model.drm || []).length ? model.drm : [], 'Nenhum sistema de DRM/criptografia declarado no manifest.');

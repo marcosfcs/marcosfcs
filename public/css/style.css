@@ -287,6 +287,11 @@ h3 {
 }
 .data-table td.num { font-variant-numeric: tabular-nums; }
 .data-table tbody tr:hover { background: rgba(217, 70, 239, 0.05); }
+.data-table th.sortable { cursor: pointer; user-select: none; }
+.data-table th.sortable:hover { color: var(--text-primary); }
+.data-table th.sortable::after { content: '\21C5'; margin-left: 6px; opacity: 0.35; font-size: 10px; }
+.data-table th.sort-asc::after { content: '\2191'; opacity: 1; color: var(--color-purple); }
+.data-table th.sort-desc::after { content: '\2193'; opacity: 1; color: var(--color-purple); }
 
 .range-hdr { font-weight: 600; color: var(--text-primary); }
 .range-hdr::before { content: "◆ "; color: var(--color-purple); }
