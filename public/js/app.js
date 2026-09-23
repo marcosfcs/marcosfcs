@@ -2088,7 +2088,8 @@ async function inspectYouTube(url) {
       const hint = body.code === 'NO_YTDLP'
         ? ' Instale o yt-dlp e sirva a página por "node server.js".'
         : '';
-      setStatus('Não foi possível resolver a URL do YouTube: ' + (body.error || `HTTP ${r.status}`) + hint, 'error');
+      const detail = body.detail ? ` — detalhe do yt-dlp: ${body.detail}` : '';
+      setStatus('Não foi possível resolver a URL do YouTube: ' + (body.error || `HTTP ${r.status}`) + hint + detail, 'error');
       return true;
     }
     info = body;
