@@ -48,7 +48,7 @@ type Store struct {
 
 // Open abre (criando se preciso) o banco em <DataDir>/history.sqlite. Se
 // falhar, Store.err fica preenchido e todo handler responde 501 explicando
-// por quê — mesmo padrão usado para WebCodecs ausente.
+// por quê — mesmo padrão usado para yt-dlp/WebCodecs ausentes.
 func Open() *Store {
 	dir, err := DataDir()
 	if err != nil {

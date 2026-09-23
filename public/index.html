@@ -106,6 +106,9 @@
           <button type="button" data-example="https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd">DASH VOD (Akamai)</button>
           <button type="button" data-example="/samples/master.m3u8">Amostra local HLS</button>
           <button type="button" data-example="/samples/manifest.mpd">Amostra local DASH</button>
+          <button type="button" data-example="https://www.youtube.com/watch?v=XV6Ld4TJYYM">VOD Youtube</button>
+          <p class="examples-note">Para URLs do YouTube (<code>youtube.com/watch</code>, <code>youtu.be</code>, lives): requer
+            <code>yt-dlp</code> instalado na máquina que roda o <code>server.js</code> (<code>pip install yt-dlp</code>).</p>
         </div>
       </details>
     </div>
@@ -347,7 +350,7 @@
           </div>
           <h3>Breakdown de rede por segmento <span class="hint">(DNS/TCP/TLS via Resource Timing API — independente do motor)</span></h3>
           <div id="network-breakdown-table"></div>
-          <h3>CDN / edge <span class="hint">(headers de cache/PoP — só disponível via proxy local ou quando a origem expõe via CORS; não alcança o &lt;video&gt; nativo do playback progressivo direto)</span></h3>
+          <h3>CDN / edge <span class="hint">(headers de cache/PoP — só disponível via proxy local ou quando a origem expõe via CORS; não alcança o &lt;video&gt; nativo do progressivo do YouTube)</span></h3>
           <div id="cdn-table"></div>
           <h3>CMCD / CMSD <span class="hint">(dados operacionais padronizados trocados com o CDN)</span></h3>
           <div id="cmcd-overview"></div>
@@ -497,6 +500,7 @@
   <script src="js/charts.js"></script>
   <script src="js/chromaticity.js"></script>
   <script src="js/quality.js"></script>
+  <script src="js/youtube.js"></script>
   <script src="js/analyzer.js"></script>
   <script src="js/audiometer.js"></script>
   <script src="js/alerts.js"></script>

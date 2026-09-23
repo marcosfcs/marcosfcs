@@ -142,6 +142,31 @@ Por padrão em `~/.stream-inspector/` (fora da pasta do repositório) — overri
 propósito: uma pasta *dentro* do repositório seria apagada a cada `git clone`/
 checkout novo.
 
+## YouTube (opcional)
+
+URLs do YouTube (`youtube.com/watch`, `youtu.be`, lives) são suportadas através de
+um **resolvedor local** que delega ao [`yt-dlp`](https://github.com/yt-dlp/yt-dlp).
+O sistema **não** decodifica assinaturas do YouTube — apenas chama o yt-dlp (que
+você instala) e consome o JSON que ele produz. Pré-requisitos:
+
+```bash
+pip install yt-dlp       # ou pipx install yt-dlp
+node server.js           # o endpoint /resolve precisa do servidor
+```
+
+- **Ao vivo**: o yt-dlp extrai o master HLS real → o inspetor roda o pipeline
+  completo (variantes, segmentação, container, telemetria, cor) com paridade total.
+- **VOD**: o yt-dlp devolve formatos separados (não há manifest único). As tabelas
+  de vídeo/áudio/legendas são montadas do JSON do yt-dlp (inclusive formatos 4K/HDR
+  adaptativos), e a telemetria/cor/áudio/alertas/QoE rodam reproduzindo o melhor
+  formato **combinado** disponível (progressivo, tipicamente ≤720p). Como a URL de
+  mídia real do YouTube não carrega extensão de arquivo, o player recebe um
+  `mimeType` explícito (derivado do `ext` do yt-dlp) — sem isso o motor nativo do
+  Clappr não consegue selecionar o playback correto.
+
+Uso sujeito aos Termos do YouTube — a ferramenta destina-se a inspeção técnica e a
+responsabilidade é de quem a opera.
+
 ## Sobre PSNR/SSIM/VMAF
 
 **PSNR e SSIM estão implementados de verdade** (seção "Qualidade" dentro de
@@ -175,10 +200,10 @@ qualquer uma das duas, ou as duas ao mesmo tempo em portas diferentes.
 
 | Caminho | O que é |
 |---|---|
-| `server.js` | Backend em **Node puro** (zero dependências) — servidor estático + proxy de CORS (`/p/…`), histórico via `node:sqlite`. Ponto de entrada de `npm start`/`node server.js`. |
+| `server.js` | Backend em **Node puro** (zero dependências) — servidor estático + proxy de CORS (`/p/…`), resolução de YouTube via `yt-dlp`, histórico via `node:sqlite`. Ponto de entrada de `npm start`/`node server.js`. |
 | `public/` | Todo o frontend (HTML/CSS/JS vanilla, sem framework nem build step) — servido tanto pelo `server.js` quanto embedado no binário Go. Ver detalhamento completo abaixo. |
 | `cmd/server/` | Ponto de entrada do backend em **Go** (`main.go`) — monta as rotas HTTP e liga os pacotes de `internal/`; equivalente a `server.js`, mesmas rotas e variáveis de ambiente. |
-| `internal/` | Pacotes Go que implementam o backend, um por responsabilidade: `proxy/` (proxy de CORS + reescrita de manifest), `security/` (bloqueio de SSRF, guard de mesma-origem), `history/` (persistência SQLite), `static/` (serve o `public/` embedado). Cada um é o equivalente direto de uma seção do `server.js`. |
+| `internal/` | Pacotes Go que implementam o backend, um por responsabilidade: `proxy/` (proxy de CORS + reescrita de manifest), `security/` (bloqueio de SSRF, guard de mesma-origem), `resolve/` (resolução de YouTube via `yt-dlp`), `history/` (persistência SQLite), `static/` (serve o `public/` embedado). Cada um é o equivalente direto de uma seção do `server.js`. |
 | `assets.go` | `//go:embed` que empacota `public/` inteiro dentro do binário Go — é por isso que `go build` gera um único executável sem precisar copiar a pasta `public/` junto. |
 | `scripts/` | Testes headless (Node puro, sem navegador) da matemática mais sensível a erro de offset/bit: `color-math-test.js` (normalização PQ/HLG, conversão de primárias) e `encoding-gop-test.js` (parsing de boxes fMP4/`trun` e pacotes MPEG-TS/PES para keyframe e GOP). |
 | `go.mod` / `go.sum` | Dependências do backend Go (hoje só `modernc.org/sqlite`, driver SQLite 100% Go sem cgo, + suas dependências transitivas). |
@@ -205,6 +230,7 @@ public/
   js/qoe.js               startup, rebuffering, trocas de ABR, exportação de sessão
   js/alerts.js            motor de alertas com thresholds ajustáveis
   js/quality.js           comparador PSNR/SSIM (canvas + dois <video> sincronizados)
+  js/youtube.js           mapeia o JSON do yt-dlp → modelo do inspetor (YouTube)
   js/app.js               orquestração: fetch → parse → tabelas → playback → telemetria
   vendor/clappr/          Clappr core + plugins (MediaControl, hls.js/Shaka playback) — envelope do player
   vendor/hls-*.min.js     hls.js, 2 versões (produção + mais recente — trocáveis no combo-box)
