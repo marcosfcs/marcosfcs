@@ -391,10 +391,10 @@
           <h3>LUFS ao longo do tempo <span class="hint">(ITU-R BS.1770-4 — K-weighting real)</span></h3>
           <div id="chart-lufs"></div>
 
-          <h3>Narração × ambiente <span class="hint">(Mid/Side + banda vocal ~200Hz–4kHz — aproximação, não é separação de fonte real)</span></h3>
+          <h3>Diálogo × ambiente <span class="hint">(Mid/Side + banda vocal ~200Hz–4kHz — aproximação, não é separação de fonte real)</span></h3>
           <div class="vu-wrap">
             <div class="vu-row" id="vu-narration">
-              <span class="vu-ch">N</span>
+              <span class="vu-ch">D</span>
               <div class="vu-track"><div class="vu-cover"></div><div class="vu-peak"></div></div>
               <span class="vu-db">—</span>
             </div>
@@ -405,19 +405,29 @@
             </div>
           </div>
           <div class="tiles">
-            <div class="tile"><span class="tile-label">Narração − Ambiente</span><span class="tile-value" id="tile-narration-delta">—</span></div>
+            <div class="tile"><span class="tile-label">Diálogo − Ambiente (agora)</span><span class="tile-value" id="tile-narration-delta">—</span></div>
           </div>
+          <h3>Amplitude ao longo do tempo <span class="hint">(RMS em dBFS)</span></h3>
+          <div id="chart-narration"></div>
+          <div class="tiles">
+            <div class="tile"><span class="tile-label">Média do diálogo</span><span class="tile-value" id="tile-dialogue-mean">—</span></div>
+            <div class="tile"><span class="tile-label">Mediana do diálogo</span><span class="tile-value" id="tile-dialogue-median">—</span></div>
+            <div class="tile"><span class="tile-label">Média do ambiente</span><span class="tile-value" id="tile-ambient-mean">—</span></div>
+            <div class="tile"><span class="tile-label">Mediana do ambiente</span><span class="tile-value" id="tile-ambient-median">—</span></div>
+          </div>
+          <p class="note">Média/mediana calculadas desde o início da reprodução (janela de até ~15min).</p>
           <p id="narration-note" class="note warn"></p>
-          <label class="narration-preview-toggle"><input type="checkbox" id="narration-preview-toggle" /> Ouvir só a narração isolada (silencia o resto do mix)</label>
+          <label class="narration-preview-toggle"><input type="checkbox" id="narration-preview-toggle" /> Ouvir só o diálogo isolado (silencia o resto do mix)</label>
           <details>
             <summary>Sobre este método ▾</summary>
             <p class="note">Deriva Mid = (L+R)/2 e Side = (L−R)/2 do sinal estéreo, depois aplica um passa-banda
-              ~200Hz–4kHz (faixa de inteligibilidade da fala) sobre o Mid como proxy de narração/diálogo.
+              ~200Hz–4kHz (faixa de inteligibilidade da fala) sobre o Mid como proxy de diálogo/narração.
               <strong>Não é separação de fonte real</strong> — isso exigiria um modelo de IA treinado (ex.:
               Spleeter/Demucs) rodando offline, inviável em tempo real no navegador. Funciona bem quando a
-              narração está mixada no centro (prática comum em dublagem/voice-over) e música/efeitos têm
-              largura estéreo; não funciona em fonte mono (sem conteúdo lateral) nem se a narração estiver
-              panorâmica — nesses casos um aviso aparece acima.</p>
+              fala (narração em off ou diálogo de cena, como em novelas) está mixada no centro — prática comum
+              em dublagem/voice-over e na maioria das mixagens de ficção — e música/efeitos têm largura
+              estéreo; não funciona em fonte mono (sem conteúdo lateral) nem se a fala estiver panorâmica —
+              nesses casos um aviso aparece acima.</p>
           </details>
         </div>
 

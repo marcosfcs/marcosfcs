@@ -763,7 +763,7 @@ function setupTelemetryCharts(isLive) {
   state.t0 = performance.now();
   destroyChart('buffer'); destroyChart('bitrate'); destroyChart('lumaT');
   destroyChart('rgb'); destroyChart('luma');
-  destroyChart('audioLevel'); destroyChart('spectrum'); destroyChart('lufs');
+  destroyChart('audioLevel'); destroyChart('spectrum'); destroyChart('lufs'); destroyChart('narration');
   destroyChart('ttfb'); destroyChart('throughput');
   destroyChart('bufferTimeline');
 
@@ -834,6 +834,14 @@ function setupTelemetryCharts(isLive) {
     ],
     yFormat: (v) => v.toFixed(1).replace('.', ',') + ' LUFS',
     xFormat: fmtClock, windowSec: 120, height: 200, yMin: -40, yMax: 0,
+  });
+  state.charts.narration = new LineChart($('#chart-narration'), {
+    series: [
+      { key: 'd', label: 'Diálogo (banda vocal)', colorVar: '--series-6' },
+      { key: 'a', label: 'Ambiente (lateral)', colorVar: '--series-4' },
+    ],
+    yFormat: (v) => v.toFixed(0) + ' dBFS',
+    xFormat: fmtClock, windowSec: 120, height: 180, yMin: -60, yMax: 0,
   });
   $('#network-breakdown-table').innerHTML = '';
   $('#cdn-table').innerHTML = '';
@@ -1101,10 +1109,10 @@ function startTelemetry(model, isLive) {
       const delta = a.narration.deltaDb;
       $('#tile-narration-delta').textContent = (delta > 0 ? '+' : '') + delta.toFixed(1).replace('.', ',') + ' dB';
       $('#narration-note').textContent = a.narration.likelyMono
-        ? 'Sinal lateral (Side) praticamente silencioso com canal central ativo — fonte provavelmente mono; a comparação narração × ambiente perde o sentido aqui.'
+        ? 'Sinal lateral (Side) praticamente silencioso com canal central ativo — fonte provavelmente mono; a comparação diálogo × ambiente perde o sentido aqui.'
         : '';
     } else if (state.audioMeter && state.audioMeter.ok && !state.audioMeter.narrationOk) {
-      $('#narration-note').textContent = 'Isolamento narração × ambiente indisponível: ' + (state.audioMeter.narrationError || 'erro desconhecido');
+      $('#narration-note').textContent = 'Isolamento diálogo × ambiente indisponível: ' + (state.audioMeter.narrationError || 'erro desconhecido');
     }
   }, 150);
 
@@ -1180,6 +1188,14 @@ function startTelemetry(model, isLive) {
       }
       state.truePeak = Math.max(state.lastAudio.truePeakL, state.lastAudio.truePeakR);
       $('#tile-truepeak').textContent = state.truePeak.toFixed(1).replace('.', ',') + ' dBTP';
+      if (state.lastAudio.narration) {
+        const n = state.lastAudio.narration;
+        state.charts.narration && state.charts.narration.push(t, { d: n.narrationDbfs, a: n.ambientDbfs });
+        if (n.dialogueMeanDb != null) $('#tile-dialogue-mean').textContent = n.dialogueMeanDb.toFixed(1).replace('.', ',') + ' dBFS';
+        if (n.dialogueMedianDb != null) $('#tile-dialogue-median').textContent = n.dialogueMedianDb.toFixed(1).replace('.', ',') + ' dBFS';
+        if (n.ambientMeanDb != null) $('#tile-ambient-mean').textContent = n.ambientMeanDb.toFixed(1).replace('.', ',') + ' dBFS';
+        if (n.ambientMedianDb != null) $('#tile-ambient-median').textContent = n.ambientMedianDb.toFixed(1).replace('.', ',') + ' dBFS';
+      }
       const lu = state.lastAudio.lufs;
       if (lu) {
         state.charts.lufs && state.charts.lufs.push(t, { m: lu.momentary, s: lu.shortTerm, i: lu.integrated });
@@ -2487,8 +2503,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!state.audioMeter || !state.audioMeter.ok) { e.target.checked = false; return; }
     state.audioMeter.setPreviewEnabled(e.target.checked);
     logEvent(e.target.checked
-      ? 'Pré-visualização isolada da narração ativada (silenciando o resto do mix).'
-      : 'Pré-visualização isolada da narração desligada.');
+      ? 'Pré-visualização isolada do diálogo ativada (silenciando o resto do mix).'
+      : 'Pré-visualização isolada do diálogo desligada.');
   });
 
   // exportação de sessão

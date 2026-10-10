@@ -36,6 +36,8 @@
  *     (Side ≈ 0 sempre) nem se a narração estiver panorâmica. Separação
  *     de fonte cega de verdade exigiria um modelo de IA (ex.: Spleeter/
  *     Demucs) rodando offline — inviável em tempo real no navegador.
+ *     Também acumula histórico (teto ~15min, igual _blockPowers) e expõe
+ *     média/mediana em dBFS de cada lado desde o início da reprodução.
  *
  * Limitações detectadas e reportadas:
  *   - origem sem CORS → o navegador entrega silêncio permanente (tainted);
@@ -196,6 +198,11 @@ class AudioMeter {
     this._midBuf = new Float32Array(this.midAnalyser.fftSize);
     this._sideBuf = new Float32Array(this.sideAnalyser.fftSize);
     this._vocalBuf = new Float32Array(this.vocalAnalyser.fftSize);
+
+    // histórico pra média/mediana desde o início da reprodução — mesmo teto
+    // de ~15min a 150ms/leitura usado em _blockPowers (LUFS), por paridade
+    this._dialogueHistory = [];
+    this._ambientHistory = [];
   }
 
   /** Liga/desliga a pré-visualização audível da banda vocal isolada — ligado,
@@ -307,6 +314,12 @@ class AudioMeter {
       const vocal = channelStats(this._vocalBuf);
       const narrationDbfs = toDbfs(vocal.rms);
       const ambientDbfs = toDbfs(side.rms);
+
+      this._dialogueHistory.push(narrationDbfs);
+      this._ambientHistory.push(ambientDbfs);
+      if (this._dialogueHistory.length > 6000) this._dialogueHistory.shift();
+      if (this._ambientHistory.length > 6000) this._ambientHistory.shift();
+
       narration = {
         narrationDbfs, ambientDbfs,
         midDbfs: toDbfs(mid.rms),
@@ -314,6 +327,10 @@ class AudioMeter {
         // lateral praticamente silenciosa com sinal central real → fonte
         // provavelmente mono; a comparação Mid/Side perde o sentido aqui.
         likelyMono: side.rms < 0.0003 && mid.rms > 0.0003,
+        dialogueMeanDb: mean(this._dialogueHistory),
+        dialogueMedianDb: median(this._dialogueHistory),
+        ambientMeanDb: mean(this._ambientHistory),
+        ambientMedianDb: median(this._ambientHistory),
       };
     }
 
@@ -362,6 +379,20 @@ function truePeakAbs(buf) {
 function toDbfs(v) {
   if (v <= 0) return -60;
   return Math.max(-60, 20 * Math.log10(v));
+}
+
+/** Média aritmética simples (dB — linear nesse domínio, não de potência). */
+function mean(arr) {
+  if (!arr.length) return null;
+  return arr.reduce((s, v) => s + v, 0) / arr.length;
+}
+
+/** Mediana — não é afetada por picos/vales isolados como a média é. */
+function median(arr) {
+  if (!arr.length) return null;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 function meanSquare(buf) {
