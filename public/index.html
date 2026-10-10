@@ -390,6 +390,35 @@
           </div>
           <h3>LUFS ao longo do tempo <span class="hint">(ITU-R BS.1770-4 — K-weighting real)</span></h3>
           <div id="chart-lufs"></div>
+
+          <h3>Narração × ambiente <span class="hint">(Mid/Side + banda vocal ~200Hz–4kHz — aproximação, não é separação de fonte real)</span></h3>
+          <div class="vu-wrap">
+            <div class="vu-row" id="vu-narration">
+              <span class="vu-ch">N</span>
+              <div class="vu-track"><div class="vu-cover"></div><div class="vu-peak"></div></div>
+              <span class="vu-db">—</span>
+            </div>
+            <div class="vu-row" id="vu-ambient">
+              <span class="vu-ch">A</span>
+              <div class="vu-track"><div class="vu-cover"></div><div class="vu-peak"></div></div>
+              <span class="vu-db">—</span>
+            </div>
+          </div>
+          <div class="tiles">
+            <div class="tile"><span class="tile-label">Narração − Ambiente</span><span class="tile-value" id="tile-narration-delta">—</span></div>
+          </div>
+          <p id="narration-note" class="note warn"></p>
+          <label class="narration-preview-toggle"><input type="checkbox" id="narration-preview-toggle" /> Ouvir só a narração isolada (silencia o resto do mix)</label>
+          <details>
+            <summary>Sobre este método ▾</summary>
+            <p class="note">Deriva Mid = (L+R)/2 e Side = (L−R)/2 do sinal estéreo, depois aplica um passa-banda
+              ~200Hz–4kHz (faixa de inteligibilidade da fala) sobre o Mid como proxy de narração/diálogo.
+              <strong>Não é separação de fonte real</strong> — isso exigiria um modelo de IA treinado (ex.:
+              Spleeter/Demucs) rodando offline, inviável em tempo real no navegador. Funciona bem quando a
+              narração está mixada no centro (prática comum em dublagem/voice-over) e música/efeitos têm
+              largura estéreo; não funciona em fonte mono (sem conteúdo lateral) nem se a narração estiver
+              panorâmica — nesses casos um aviso aparece acima.</p>
+          </details>
         </div>
 
         <div class="panel" data-panel="cor" hidden>

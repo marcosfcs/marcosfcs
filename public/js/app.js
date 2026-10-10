@@ -1038,6 +1038,11 @@ function startTelemetry(model, isLive) {
   } else {
     $('#audio-note').textContent = '';
   }
+  // caminho de narração×ambiente é recriado do zero a cada playback — a
+  // pré-visualização sempre volta desligada, sincroniza o checkbox com isso
+  const previewToggle = $('#narration-preview-toggle');
+  if (previewToggle) previewToggle.checked = false;
+  $('#narration-note').textContent = '';
   if (state.player && state.playerKind) {
     state.netmon = new NetMonitor(state.player, state.playerKind, (s) => {
       const t = (performance.now() - state.t0) / 1000;
@@ -1089,6 +1094,17 @@ function startTelemetry(model, isLive) {
       $('#audio-note').textContent =
         'Sinal de áudio permanentemente zerado com o vídeo em reprodução — provável bloqueio de CORS ' +
         '(mídia "tainted"): use o proxy local para liberar a medição.';
+    }
+    if (a.narration) {
+      updateVuMeter('narration', a.narration.narrationDbfs, a.narration.narrationDbfs);
+      updateVuMeter('ambient', a.narration.ambientDbfs, a.narration.ambientDbfs);
+      const delta = a.narration.deltaDb;
+      $('#tile-narration-delta').textContent = (delta > 0 ? '+' : '') + delta.toFixed(1).replace('.', ',') + ' dB';
+      $('#narration-note').textContent = a.narration.likelyMono
+        ? 'Sinal lateral (Side) praticamente silencioso com canal central ativo — fonte provavelmente mono; a comparação narração × ambiente perde o sentido aqui.'
+        : '';
+    } else if (state.audioMeter && state.audioMeter.ok && !state.audioMeter.narrationOk) {
+      $('#narration-note').textContent = 'Isolamento narração × ambiente indisponível: ' + (state.audioMeter.narrationError || 'erro desconhecido');
     }
   }, 150);
 
@@ -2465,6 +2481,14 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#chroma-color-mode').addEventListener('change', (e) => {
     if (state.charts.chroma) state.charts.chroma.setColorMode(e.target.value);
     if (state.charts.chroma3d) state.charts.chroma3d.setColorMode(e.target.value);
+  });
+
+  $('#narration-preview-toggle').addEventListener('change', (e) => {
+    if (!state.audioMeter || !state.audioMeter.ok) { e.target.checked = false; return; }
+    state.audioMeter.setPreviewEnabled(e.target.checked);
+    logEvent(e.target.checked
+      ? 'Pré-visualização isolada da narração ativada (silenciando o resto do mix).'
+      : 'Pré-visualização isolada da narração desligada.');
   });
 
   // exportação de sessão

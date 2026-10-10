@@ -26,6 +26,16 @@
  *     filtro FIR polyphase exato do Anexo 2 da BS.1770 — suficiente para
  *     detectar estouro de intersample peak na prática, não para
  *     certificação formal.
+ *   - Narração × ambiente (aproximação, não é separação de fonte real):
+ *     deriva Mid = (L+R)/2 e Side = (L-R)/2 do estéreo (caminho paralelo,
+ *     via GainNode — não afeta VU/espectro/LUFS) e aplica um passa-banda
+ *     ~200Hz–4kHz (faixa de inteligibilidade da fala) sobre o Mid como
+ *     proxy de narração/diálogo. Funciona bem quando a narração está
+ *     mixada no centro (prática comum em dublagem/voice-over) e
+ *     música/efeitos têm largura estéreo — não funciona em fonte mono
+ *     (Side ≈ 0 sempre) nem se a narração estiver panorâmica. Separação
+ *     de fonte cega de verdade exigiria um modelo de IA (ex.: Spleeter/
+ *     Demucs) rodando offline — inviável em tempo real no navegador.
  *
  * Limitações detectadas e reportadas:
  *   - origem sem CORS → o navegador entrega silêncio permanente (tainted);
@@ -98,6 +108,14 @@ class AudioMeter {
         this.lufsError = 'IIRFilterNode não suportado neste navegador';
       }
 
+      this.narrationOk = false;
+      try {
+        this._setupNarrationPath();
+        this.narrationOk = true;
+      } catch (e) {
+        this.narrationError = e.message;
+      }
+
       this.ok = true;
     } catch (e) {
       this.error = e.message;
@@ -124,6 +142,72 @@ class AudioMeter {
     this._lufsBufR = new Float32Array(this._lufsR.analyser.fftSize);
   }
 
+  /**
+   * Caminho paralelo Mid/Side + banda vocal (ver nota de limitação no
+   * cabeçalho do arquivo). Não altera o grafo VU/espectro/LUFS existente —
+   * só pendura mais ramos a partir do mesmo splitter.
+   */
+  _setupNarrationPath() {
+    // Mid = (L+R)/2: soma L e R no mesmo GainNode (conexões múltiplas no
+    // mesmo destino somam automaticamente no Web Audio).
+    const midGainL = this.ctx.createGain(); midGainL.gain.value = 0.5;
+    const midGainR = this.ctx.createGain(); midGainR.gain.value = 0.5;
+    this.splitter.connect(midGainL, 0);
+    this.splitter.connect(midGainR, 1);
+    const midSum = this.ctx.createGain(); midSum.gain.value = 1;
+    midGainL.connect(midSum);
+    midGainR.connect(midSum);
+
+    // Side = (L-R)/2: mesmo truque, com ganho negativo no ramo de R.
+    const sideGainL = this.ctx.createGain(); sideGainL.gain.value = 0.5;
+    const sideGainRneg = this.ctx.createGain(); sideGainRneg.gain.value = -0.5;
+    this.splitter.connect(sideGainL, 0);
+    this.splitter.connect(sideGainRneg, 1);
+    const sideSum = this.ctx.createGain(); sideSum.gain.value = 1;
+    sideGainL.connect(sideSum);
+    sideGainRneg.connect(sideSum);
+
+    this.midAnalyser = this.ctx.createAnalyser(); this.midAnalyser.fftSize = 2048;
+    this.sideAnalyser = this.ctx.createAnalyser(); this.sideAnalyser.fftSize = 2048;
+    midSum.connect(this.midAnalyser);
+    sideSum.connect(this.sideAnalyser);
+
+    // Passa-banda ~200Hz–4kHz sobre o Mid: isola a faixa onde a fala
+    // concentra energia/articulação, afastando grave de música/ambiência
+    // e agudo de pratos/efeitos — proxy de narração, não isolamento real.
+    this.vocalHp = this.ctx.createBiquadFilter();
+    this.vocalHp.type = 'highpass'; this.vocalHp.frequency.value = 200; this.vocalHp.Q.value = 0.7;
+    this.vocalLp = this.ctx.createBiquadFilter();
+    this.vocalLp.type = 'lowpass'; this.vocalLp.frequency.value = 4000; this.vocalLp.Q.value = 0.7;
+    midSum.connect(this.vocalHp);
+    this.vocalHp.connect(this.vocalLp);
+    this.vocalAnalyser = this.ctx.createAnalyser(); this.vocalAnalyser.fftSize = 2048;
+    this.vocalLp.connect(this.vocalAnalyser);
+
+    // Pré-visualização audível, desligada por padrão (gain 0) — ver
+    // setPreviewEnabled(). Único ramo deste grafo que toca em destination;
+    // os outros (midAnalyser/sideAnalyser/vocalAnalyser) só medem.
+    this.previewGain = this.ctx.createGain();
+    this.previewGain.gain.value = 0;
+    this.vocalLp.connect(this.previewGain);
+    this.previewGain.connect(this.ctx.destination);
+
+    this._midNodes = [midGainL, midGainR, midSum, sideGainL, sideGainRneg, sideSum];
+    this._midBuf = new Float32Array(this.midAnalyser.fftSize);
+    this._sideBuf = new Float32Array(this.sideAnalyser.fftSize);
+    this._vocalBuf = new Float32Array(this.vocalAnalyser.fftSize);
+  }
+
+  /** Liga/desliga a pré-visualização audível da banda vocal isolada — ligado,
+   * silencia o mix completo (this.gain) e toca só a narração isolada; o
+   * ramo de medição (VU/LUFS/narração×ambiente) continua rodando igual. */
+  setPreviewEnabled(on) {
+    if (!this.narrationOk) return;
+    const now = this.ctx.currentTime;
+    this.previewGain.gain.setTargetAtTime(on ? 1 : 0, now, 0.02);
+    this.gain.gain.setTargetAtTime(on ? 0 : 1, now, 0.02);
+  }
+
   destroy() {
     if (!this.ok) return;
     document.removeEventListener('click', this._resume);
@@ -136,6 +220,12 @@ class AudioMeter {
         for (const chain of [this._lufsL, this._lufsR]) {
           chain.s1.disconnect(); chain.s2.disconnect(); chain.analyser.disconnect();
         }
+      }
+      if (this.narrationOk) {
+        for (const n of this._midNodes) n.disconnect();
+        this.midAnalyser.disconnect(); this.sideAnalyser.disconnect();
+        this.vocalHp.disconnect(); this.vocalLp.disconnect(); this.vocalAnalyser.disconnect();
+        this.previewGain.disconnect();
       }
     } catch { /* grafo já desmontado */ }
     // ctx e source ficam no elemento para reuso (createMediaElementSource é único por elemento)
@@ -207,6 +297,26 @@ class AudioMeter {
       };
     }
 
+    let narration = null;
+    if (this.narrationOk) {
+      this.midAnalyser.getFloatTimeDomainData(this._midBuf);
+      this.sideAnalyser.getFloatTimeDomainData(this._sideBuf);
+      this.vocalAnalyser.getFloatTimeDomainData(this._vocalBuf);
+      const mid = channelStats(this._midBuf);
+      const side = channelStats(this._sideBuf);
+      const vocal = channelStats(this._vocalBuf);
+      const narrationDbfs = toDbfs(vocal.rms);
+      const ambientDbfs = toDbfs(side.rms);
+      narration = {
+        narrationDbfs, ambientDbfs,
+        midDbfs: toDbfs(mid.rms),
+        deltaDb: narrationDbfs - ambientDbfs,
+        // lateral praticamente silenciosa com sinal central real → fonte
+        // provavelmente mono; a comparação Mid/Side perde o sentido aqui.
+        likelyMono: side.rms < 0.0003 && mid.rms > 0.0003,
+      };
+    }
+
     return {
       dbfsL: toDbfs(L.rms), dbfsR: toDbfs(R.rms),
       peakL: toDbfs(L.peak), peakR: toDbfs(R.peak),
@@ -215,6 +325,7 @@ class AudioMeter {
       contextState: this.ctx.state,
       taintedSuspect: this.taintedSuspect,
       lufs,
+      narration,
     };
   }
 }
