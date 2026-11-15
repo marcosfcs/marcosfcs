@@ -27,6 +27,22 @@ quadro a quadro), não de heurísticas sobre o que o manifest *deveria* conter.
 | Baixa latência / anúncios | LL-HLS (`EXT-X-PART`/`PRELOAD-HINT`/`SERVER-CONTROL`) e LL-DASH (`ServiceDescription/Latency`); marcadores SCTE-35 (`EXT-X-DATERANGE`/`CUE-OUT`, DASH `EventStream`) | badge + tabela condicional |
 | Qualidade (PSNR/SSIM) | comparação em tempo real entre uma mezzanine de referência e uma variante do stream, amostrada via canvas | tiles + gráficos temporais |
 
+## Navegação
+
+A tela inicial lista exemplos e os testes recentes. Ao inspecionar, a interface
+passa a ter três áreas: **navegação** das 11 seções, **conteúdo** da seção ativa e
+um **monitor fixo** (player, sinais vitais e abas de Eventos, Alertas, Controles e
+Croma) que acompanha a rolagem. Em telas estreitas a navegação vira uma faixa
+horizontal e, abaixo de 1000px, tudo se empilha em coluna única.
+
+- Cada seção tem endereço próprio (`#/telemetria`, `#/cor`…), então o botão
+  voltar do navegador percorre as seções e o link pode ser salvo.
+- Atalhos: `/` foca a URL; `1`–`9` e `0` abrem as seções na ordem do menu; `H`
+  abre o histórico; `[` e `]` vão para a seção anterior/próxima; `M` recolhe o
+  monitor em um mini-player flutuante, dando largura total ao conteúdo.
+- Erros fatais de reprodução aparecem em um aviso sob o player e no tile de
+  estado, além do log de eventos.
+
 ## Player e motores de playback
 
 O `<video>` é envelopado pelo **Clappr** (`@clappr/core`, BSD-3-Clause), que
@@ -235,9 +251,10 @@ qualquer uma das duas, ou as duas ao mesmo tempo em portas diferentes.
 ```
 server.js                servidor estático + proxy de CORS (Node puro, zero dependências)
 public/
-  index.html              UI (cockpit: menu lateral de 11 seções + quadro de player/telemetria)
-  css/style.css           tokens de design (light/dark automático)
-  css/cockpit.css         layout do cockpit (menu lateral + quadro de monitoração)
+  index.html              UI: tela inicial (exemplos + testes recentes) e sessão (navegação de 11 seções │ conteúdo │ monitor fixo)
+  css/style.css           tokens de design (tema escuro) e componentes
+  css/cockpit.css         layout responsivo: navegação, painéis e monitor sticky
+  js/ui.js                navegação (deep link por hash, atalhos de teclado), abas do monitor, resumo da Visão geral
   js/parsers.js           parsers próprios de M3U8 e MPD → modelo normalizado
   js/container.js         inspeção binária de segmentos (MPEG-TS PAT/PMT; fMP4 moov/tenc/pssh; moof/traf/trun e PES para keyframe/GOP)
   js/charts.js            gráficos em canvas (séries temporais, curvas, degraus)

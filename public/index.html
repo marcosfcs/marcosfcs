@@ -3,10 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
   <title>Stream Inspector — HLS / DASH</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap" />
   <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="css/cockpit.css" />
   <link rel="icon" type="image/svg+xml" href="assets/logo/inspector-icon.svg" />
@@ -80,256 +78,314 @@
     })();
   </script>
 </head>
-<body>
-  <!-- ══════════ barra superior compacta (sticky) ══════════ -->
-  <div class="app-topbar">
-    <div class="topbar-inner">
-      <div class="brand">
-        <img class="brand-logo" src="assets/logo/inspector-mark.svg" alt="" width="34" height="34" />
-        <span class="brand-name">Stream Inspector</span>
-        <span class="brand-eyebrow">Playback &amp; Experience</span>
-      </div>
+<body data-view="home">
+  <a class="skip-link" href="#main">Pular para o conteúdo</a>
 
-      <form id="form" class="url-form" autocomplete="off">
-        <input id="url" type="url" required
-               placeholder="Cole a URL do manifest (.m3u8 ou .mpd)…"
-               spellcheck="false" />
+  <!-- ══════════ barra superior (sticky): marca + URL + exemplos ══════════ -->
+  <header class="app-topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="./" title="Voltar ao início">
+        <img class="brand-logo" src="assets/logo/inspector-mark.svg" alt="" width="30" height="30" />
+        <span class="brand-name">Stream Inspector</span>
+      </a>
+
+      <form id="form" class="url-form" autocomplete="off" role="search">
+        <label class="visually-hidden" for="url">URL do manifest</label>
+        <input id="url" type="text" inputmode="url" required
+               placeholder="Cole a URL do manifest (.m3u8 ou .mpd) ou um link do YouTube"
+               spellcheck="false" autocapitalize="off" autocorrect="off" />
+        <kbd class="url-kbd" aria-hidden="true">/</kbd>
         <button id="btn-run" type="submit">Inspecionar</button>
       </form>
 
       <details class="examples-pop">
-        <summary>Exemplos ▾</summary>
+        <summary>Exemplos</summary>
         <div class="examples">
-          <span class="examples-label">Exemplos:</span>
           <button type="button" data-example="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8">HLS VOD (mux)</button>
           <button type="button" data-example="https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8">HLS c/ legendas</button>
           <button type="button" data-example="https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd">DASH VOD (Akamai)</button>
           <button type="button" data-example="/samples/master.m3u8">Amostra local HLS</button>
           <button type="button" data-example="/samples/manifest.mpd">Amostra local DASH</button>
-          <button type="button" data-example="https://www.youtube.com/watch?v=XV6Ld4TJYYM">VOD Youtube</button>
-          <p class="examples-note">Para URLs do YouTube (<code>youtube.com/watch</code>, <code>youtu.be</code>, lives): requer
-            <code>yt-dlp</code> instalado na máquina que roda o <code>server.js</code> (<code>pip install yt-dlp</code>).</p>
+          <button type="button" data-example="https://www.youtube.com/watch?v=XV6Ld4TJYYM">VOD YouTube</button>
+          <p class="examples-note">YouTube requer <code>yt-dlp</code> instalado na máquina que roda o servidor.</p>
         </div>
       </details>
     </div>
-    <div id="status" class="status" hidden></div>
-  </div>
+    <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+  </header>
 
-  <!-- ══════════ cockpit: menu lateral + coluna de detalhe ══════════ -->
+  <!-- ══════════ início: estado vazio (exemplos + testes recentes) ══════════ -->
+  <main id="home" class="home">
+    <div class="home-intro">
+      <h1>Inspecione um stream HLS ou DASH</h1>
+      <p>Cole a URL de um manifest na barra acima. O stream é reproduzido com os mesmos motores de produção
+        e cada seção é preenchida com dados medidos: ladder, DRM, segmentação, rede, áudio, cor e QoE.</p>
+    </div>
+    <div class="home-grid">
+      <section class="home-card" aria-labelledby="home-ex-title">
+        <h2 id="home-ex-title">Comece por um exemplo</h2>
+        <ul class="example-list">
+          <li><button type="button" data-example="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8">
+            <span class="ex-tag">HLS</span><span class="ex-name">VOD multi-variante</span><span class="ex-host">test-streams.mux.dev</span></button></li>
+          <li><button type="button" data-example="https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8">
+            <span class="ex-tag">HLS</span><span class="ex-name">VOD com legendas</span><span class="ex-host">demo.unified-streaming.com</span></button></li>
+          <li><button type="button" data-example="https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd">
+            <span class="ex-tag">DASH</span><span class="ex-name">VOD Big Buck Bunny</span><span class="ex-host">dash.akamaized.net</span></button></li>
+          <li><button type="button" data-example="/samples/master.m3u8">
+            <span class="ex-tag">HLS</span><span class="ex-name">Amostra local com HDR, legendas e Atmos</span><span class="ex-host">só metadados</span></button></li>
+          <li><button type="button" data-example="/samples/manifest.mpd">
+            <span class="ex-tag">DASH</span><span class="ex-name">Amostra local com DRM</span><span class="ex-host">só metadados</span></button></li>
+          <li><button type="button" data-example="https://www.youtube.com/watch?v=XV6Ld4TJYYM">
+            <span class="ex-tag">YT</span><span class="ex-name">VOD do YouTube</span><span class="ex-host">requer yt-dlp</span></button></li>
+        </ul>
+      </section>
+      <section class="home-card" aria-labelledby="home-hist-title">
+        <h2 id="home-hist-title">Testes recentes</h2>
+        <p id="home-history-note" class="empty-note">Nenhum teste salvo ainda. As inspeções ficam registradas aqui.</p>
+        <ul id="home-history" class="history-list"></ul>
+      </section>
+    </div>
+    <p class="home-keys">Atalhos: <kbd>/</kbd> foca a URL · <kbd>1</kbd>–<kbd>0</kbd> trocam de seção · <kbd>[</kbd> <kbd>]</kbd> seção anterior/próxima · <kbd>M</kbd> recolhe o monitor</p>
+  </main>
+
+  <!-- ══════════ sessão: navegação + conteúdo + monitor fixo ══════════ -->
   <div class="app-shell" id="results" hidden>
 
+    <div class="session-bar">
+      <span id="badges" class="badges"></span>
+      <span id="session-url" class="session-url" title=""></span>
+      <button type="button" id="btn-copy-url" class="btn-ghost" title="Copiar a URL inspecionada">Copiar URL</button>
+      <button type="button" id="btn-dock-toggle" class="btn-ghost" aria-pressed="false"
+              title="Recolhe o monitor para dar largura total ao conteúdo (M)">Recolher monitor</button>
+    </div>
+
     <nav class="side-nav" id="side-nav" aria-label="Seções">
-      <div class="nav-group">Metadados</div>
-      <button type="button" data-nav="overview" class="active"><span class="nav-num">01</span> Visão geral</button>
-      <button type="button" data-nav="video"><span class="nav-num">02</span> Vídeo</button>
-      <button type="button" data-nav="audio"><span class="nav-num">03</span> Áudio</button>
-      <button type="button" data-nav="legendas"><span class="nav-num">04</span> Legendas &amp; DRM</button>
-      <button type="button" data-nav="segmentacao"><span class="nav-num">05</span> Segmentação</button>
-      <div class="nav-group">Análise</div>
-      <button type="button" data-nav="encoding"><span class="nav-num">06</span> Codificação de vídeo</button>
-      <button type="button" data-nav="telemetria"><span class="nav-num">07</span> Telemetria &amp; rede</button>
-      <button type="button" data-nav="audiovivo"><span class="nav-num">08</span> Áudio ao vivo</button>
-      <button type="button" data-nav="cor"><span class="nav-num">09</span> Cor &amp; HDR</button>
-      <button type="button" data-nav="qoe"><span class="nav-num">10</span> QoE</button>
+      <div class="nav-group">Manifest</div>
+      <a href="#/overview" data-nav="overview" class="active"><kbd>1</kbd><span>Visão geral</span></a>
+      <a href="#/video" data-nav="video"><kbd>2</kbd><span>Vídeo</span><b class="nav-count" data-count="video"></b></a>
+      <a href="#/audio" data-nav="audio"><kbd>3</kbd><span>Áudio</span><b class="nav-count" data-count="audio"></b></a>
+      <a href="#/legendas" data-nav="legendas"><kbd>4</kbd><span>Legendas &amp; DRM</span><b class="nav-count" data-count="legendas"></b></a>
+      <a href="#/segmentacao" data-nav="segmentacao"><kbd>5</kbd><span>Segmentação</span></a>
+      <div class="nav-group">Medição</div>
+      <a href="#/encoding" data-nav="encoding" data-live><kbd>6</kbd><span>Codificação</span></a>
+      <a href="#/telemetria" data-nav="telemetria" data-live><kbd>7</kbd><span>Telemetria &amp; rede</span></a>
+      <a href="#/audiovivo" data-nav="audiovivo" data-live><kbd>8</kbd><span>Áudio ao vivo</span></a>
+      <a href="#/cor" data-nav="cor" data-live><kbd>9</kbd><span>Cor &amp; HDR</span></a>
+      <a href="#/qoe" data-nav="qoe" data-live><kbd>0</kbd><span>QoE</span></a>
       <div class="nav-group">Sessões</div>
-      <button type="button" data-nav="historico"><span class="nav-num">11</span> Histórico de testes</button>
+      <a href="#/historico" data-nav="historico"><kbd>H</kbd><span>Histórico</span><b class="nav-count" data-count="historico"></b></a>
     </nav>
 
-    <div class="detail-col">
+    <!-- ────── MONITOR (sticky): player + sinais vitais + alertas/eventos/controles ────── -->
+    <aside class="monitor" id="monitor" aria-label="Monitor de reprodução">
+      <div class="player-box">
+        <div id="clappr-mount" class="clappr-mount"></div>
+        <div id="player-notice" class="player-notice" role="alert" hidden></div>
+      </div>
 
-      <!-- ────── QUADRO FIXO (STICKY): 08 Player + Alertas + Cromaticidade + Eventos ────── -->
-      <div class="monitor">
-        <div class="monitor-head">
-          <span class="mono-eyebrow">◆ Monitoração ao vivo — sempre visível</span>
-          <span id="badges" class="badges"></span>
+      <div class="tiles vitals">
+        <div class="tile"><span class="tile-label">Estado</span><span class="tile-value" id="tile-state">—</span></div>
+        <div class="tile"><span class="tile-label">Tempo</span><span class="tile-value" id="tile-time">—</span></div>
+        <div class="tile"><span class="tile-label">Resolução</span><span class="tile-value" id="tile-res">—</span></div>
+        <div class="tile"><span class="tile-label">Bitrate do nível</span><span class="tile-value" id="tile-bitrate">—</span></div>
+        <div class="tile"><span class="tile-label">Banda estimada</span><span class="tile-value" id="tile-bw">—</span></div>
+        <div class="tile"><span class="tile-label">FPS real / nominal</span><span class="tile-value" id="tile-fps">—</span></div>
+        <div class="tile"><span class="tile-label">Frames perdidos</span><span class="tile-value" id="tile-dropped">—</span></div>
+        <div class="tile"><span class="tile-label">Último segmento</span><span class="tile-value" id="tile-lastseg">—</span></div>
+        <div class="tile"><span class="tile-label">Luminância média</span><span class="tile-value" id="tile-apl">—</span></div>
+        <div class="tile" id="tile-latency-box" hidden><span class="tile-label">Latência (edge)</span><span class="tile-value" id="tile-latency">—</span></div>
+        <div class="tile" id="tile-e2e-box" hidden><span class="tile-label">Latência E2E (PDT)</span><span class="tile-value" id="tile-e2e">—</span></div>
+      </div>
+
+      <div class="dock-tabs" role="tablist" aria-label="Monitor">
+        <button type="button" role="tab" data-dock="events" aria-selected="true">Eventos</button>
+        <button type="button" role="tab" data-dock="alerts" aria-selected="false">Alertas<b class="tab-count" id="alert-count" hidden></b></button>
+        <button type="button" role="tab" data-dock="controls" aria-selected="false">Controles</button>
+        <button type="button" role="tab" data-dock="chroma" aria-selected="false">Croma</button>
+      </div>
+
+      <div class="dock-pane" data-dock-pane="events" role="tabpanel">
+        <ul id="event-log" class="event-log"></ul>
+      </div>
+
+      <div class="dock-pane" data-dock-pane="alerts" role="tabpanel" hidden>
+        <div id="alert-list"></div>
+        <details class="thresholds">
+          <summary>Limiares de alerta</summary>
+          <div class="threshold-row">
+            <label><span>Silêncio abaixo de</span><input type="number" id="th-silence" value="-50" step="1" max="0" min="-60" /><span>dBFS</span></label>
+            <label><span>Congelamento após</span><input type="number" id="th-freeze" value="5" step="1" min="2" max="60" /><span>s</span></label>
+            <label><span>Buffer baixo &lt;</span><input type="number" id="th-buffer" value="2" step="0.5" min="0.5" max="30" /><span>s</span></label>
+            <label><span>Loudness alvo (±2 dB)</span><input type="number" id="th-lufs" value="-24" step="1" min="-40" max="0" /><span>LUFS</span></label>
+            <label><span>True Peak acima de</span><input type="number" id="th-truepeak" value="-2" step="0.5" min="-9" max="0" /><span>dBTP</span></label>
+          </div>
+          <p class="note">Loudness Integrated e True Peak seguem a ABNT NBR 15602.</p>
+        </details>
+      </div>
+
+      <div class="dock-pane" data-dock-pane="controls" role="tabpanel" hidden>
+        <div class="ctl-row engine-picker">
+          <label class="ctl-label" for="engine-select">Motor</label>
+          <select id="engine-select" class="track-select"
+                  title="HLS → hls.js por padrão; DASH → Shaka Player por padrão. 'Produção' é a versão em uso hoje; 'mais recente' é a última release.">
+            <option value="hls-1.5.14">HLS.js 1.5.14 (produção)</option>
+            <option value="hls-1.6.16">HLS.js 1.6.16 (mais recente)</option>
+            <option value="shaka-3.1.8">Shaka Player 3.1.8 (produção)</option>
+            <option value="shaka-5.2.2">Shaka Player 5.2.2 (mais recente)</option>
+          </select>
         </div>
-
-        <div class="monitor-player">
-          <div class="player-box">
-            <div class="engine-picker">
-              <span class="engine-picker-label">Motor de reprodução:</span>
-              <select id="engine-select" class="track-select"
-                      title="HLS → hls.js por padrão; DASH → Shaka Player por padrão. As versões 'produção' são as usadas atualmente; 'mais recente' busca a última release de cada motor.">
-                <option value="hls-1.5.14">HLS.js 1.5.14 (produção)</option>
-                <option value="hls-1.6.16">HLS.js 1.6.16 (mais recente)</option>
-                <option value="shaka-3.1.8">Shaka Player 3.1.8 (produção)</option>
-                <option value="shaka-5.2.2">Shaka Player 5.2.2 (mais recente)</option>
-              </select>
-            </div>
-            <div class="net-test" title="Limita a velocidade com que o proxy local entrega os segmentos — observe no gráfico de bitrate como o ABR troca de perfil/ladder. O playback é redirecionado automaticamente para o proxy quando um limite é aplicado.">
-              <span class="engine-picker-label">Teste de rede:</span>
-              <input type="text" inputmode="decimal" id="throttle-mbps" placeholder="ex.: 2,5" />
-              <span class="engine-picker-label">Mbps</span>
-              <button type="button" id="btn-throttle-apply" class="btn-secondary">Aplicar</button>
-              <button type="button" id="btn-throttle-off" class="btn-secondary">Remover limite</button>
-              <span id="throttle-state" class="badge badge-info">Sem limite</span>
-              <label><input type="checkbox" id="force-proxy" /> Reproduzir via proxy</label>
-            </div>
-            <div class="track-picker ladder-picker" id="ladder-picker" hidden
-                 title="Trava o player numa variante específica (desliga o ABR automático do motor). Escolha 'Auto' para devolver o controle ao ABR.">
-              <span class="engine-picker-label">Qualidade (ladder):</span>
-              <select id="ladder-select" class="track-select"></select>
-            </div>
-            <div class="track-picker" id="audio-picker" hidden
-                 title="Troca a faixa de áudio (idioma / mixagem) que o player está reproduzindo.">
-              <span class="engine-picker-label">Áudio:</span>
-              <select id="audio-select" class="track-select"></select>
-            </div>
-            <div class="track-picker" id="subs-picker" hidden
-                 title="Liga/desliga e escolhe a faixa de legenda ou closed caption renderizada sobre o vídeo.">
-              <span class="engine-picker-label">Legendas / CC:</span>
-              <div id="subs-pills" class="track-pills"></div>
-            </div>
-            <div id="clappr-mount" class="clappr-mount"></div>
-            <div class="tiles">
-              <div class="tile"><span class="tile-label">Estado</span><span class="tile-value" id="tile-state">—</span></div>
-              <div class="tile"><span class="tile-label">Tempo</span><span class="tile-value" id="tile-time">—</span></div>
-              <div class="tile"><span class="tile-label">Resolução ativa</span><span class="tile-value" id="tile-res">—</span></div>
-              <div class="tile"><span class="tile-label">Bitrate do nível</span><span class="tile-value" id="tile-bitrate">—</span></div>
-              <div class="tile"><span class="tile-label">Banda estimada</span><span class="tile-value" id="tile-bw">—</span></div>
-              <div class="tile"><span class="tile-label">Frames perdidos / total</span><span class="tile-value" id="tile-dropped">—</span></div>
-              <div class="tile" id="tile-latency-box" hidden><span class="tile-label">Latência (edge)</span><span class="tile-value" id="tile-latency">—</span></div>
-              <div class="tile" id="tile-e2e-box" hidden><span class="tile-label">Latência E2E (PDT)</span><span class="tile-value" id="tile-e2e">—</span></div>
-              <div class="tile"><span class="tile-label">FPS real / nominal</span><span class="tile-value" id="tile-fps">—</span></div>
-              <div class="tile"><span class="tile-label">Último segmento</span><span class="tile-value" id="tile-lastseg">—</span></div>
-              <div class="tile"><span class="tile-label">Luminância média</span><span class="tile-value" id="tile-apl">—</span></div>
-            </div>
-          </div>
+        <div class="ctl-row track-picker ladder-picker" id="ladder-picker" hidden
+             title="Trava o player numa variante (desliga o ABR). 'Auto' devolve o controle ao ABR.">
+          <label class="ctl-label" for="ladder-select">Qualidade</label>
+          <select id="ladder-select" class="track-select"></select>
         </div>
-
-        <div class="monitor-rail">
-          <div class="mon-card chroma">
-            <div class="mon-title">
-              <span>◇ Cromaticidade CIE xyY 3D — luminância no eixo Y</span>
-              <select id="chroma-color-mode" class="track-select" style="margin-left:auto;" title="Modo de cor dos pontos">
-                <option value="tonemap">Tom mapeado</option>
-                <option value="vivid">Saturação máxima</option>
-              </select>
-            </div>
-            <details>
-              <summary>Sobre esta amostragem ▾</summary>
-              <p class="note">Cada ponto é um pixel amostrado do frame mais recente, na cor real dele, convertido para
-                coordenadas de cromaticidade, com a luminância do pixel como terceiro eixo (altura) — mostra se o conteúdo
-                está de fato usando um gamut mais amplo que o Rec.709/sRGB. Arraste com o mouse para girar a visualização.
-                Não acumula histórico: a cada nova amostragem os pontos são substituídos pelos do frame atual.</p>
-              <p id="chroma-method-note" class="note"></p>
-            </details>
-            <div id="chart-chroma"></div>
+        <div class="ctl-row track-picker" id="audio-picker" hidden
+             title="Troca a faixa de áudio (idioma / mixagem) em reprodução.">
+          <label class="ctl-label" for="audio-select">Áudio</label>
+          <select id="audio-select" class="track-select"></select>
+        </div>
+        <div class="ctl-row track-picker" id="subs-picker" hidden
+             title="Liga/desliga e escolhe a legenda ou closed caption renderizada sobre o vídeo.">
+          <span class="ctl-label">Legendas</span>
+          <div id="subs-pills" class="track-pills"></div>
+        </div>
+        <div class="ctl-group net-test">
+          <div class="ctl-group-head">
+            <span class="ctl-label">Teste de rede</span>
+            <span id="throttle-state" class="badge badge-info">Sem limite</span>
           </div>
-
-          <div class="mon-card alerts">
-            <div class="mon-title">▲ Alertas de monitoração</div>
-            <details>
-              <summary style="list-style:none;cursor:pointer;color:var(--text-faint);font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;">Limiares ▾</summary>
-              <div class="threshold-row">
-                <label>Silêncio abaixo de <input type="number" id="th-silence" value="-50" step="1" max="0" min="-60" /> dBFS</label>
-                <label>Congelamento após <input type="number" id="th-freeze" value="5" step="1" min="2" max="60" /> s</label>
-                <label>Buffer baixo &lt; <input type="number" id="th-buffer" value="2" step="0.5" min="0.5" max="30" /> s</label>
-                <label>Loudness fora de ±2 dB de <input type="number" id="th-lufs" value="-24" step="1" min="-40" max="0" /> LUFS Integrated (ABNT NBR 15602)</label>
-                <label>True Peak acima de <input type="number" id="th-truepeak" value="-2" step="0.5" min="-9" max="0" /> dBTP (ABNT NBR 15602)</label>
-              </div>
-            </details>
-            <div id="alert-list"></div>
+          <div class="ctl-inline">
+            <input type="text" inputmode="decimal" id="throttle-mbps" placeholder="ex.: 2,5" aria-label="Limite de banda em Mbps" />
+            <span class="unit">Mbps</span>
+            <button type="button" id="btn-throttle-apply" class="btn-secondary">Aplicar</button>
+            <button type="button" id="btn-throttle-off" class="btn-secondary">Remover</button>
           </div>
-
-          <div class="mon-card events">
-            <div class="mon-title">≣ Eventos</div>
-            <ul id="event-log" class="event-log"></ul>
-          </div>
+          <label class="check"><input type="checkbox" id="force-proxy" /> Reproduzir via proxy local</label>
+          <p class="note">Limita a velocidade com que o proxy entrega os segmentos; acompanhe a troca de nível em Telemetria &amp; rede.</p>
         </div>
       </div>
 
-      <!-- ────── painéis de detalhe (um por vez, via menu) ────── -->
-      <div class="panels">
+      <div class="dock-pane" data-dock-pane="chroma" role="tabpanel" hidden>
+        <div class="ctl-row">
+          <label class="ctl-label" for="chroma-color-mode">Pontos</label>
+          <select id="chroma-color-mode" class="track-select">
+            <option value="tonemap">Tom mapeado</option>
+            <option value="vivid">Saturação máxima</option>
+          </select>
+        </div>
+        <div id="chart-chroma"></div>
+        <details>
+          <summary>Sobre esta amostragem</summary>
+          <p class="note">Cada ponto é um pixel do frame mais recente, na cor real, convertido para coordenadas de
+            cromaticidade CIE xy com a luminância como altura. Mostra se o conteúdo usa um gamut mais amplo que
+            Rec.709/sRGB. Arraste para girar. Não acumula histórico.</p>
+          <p id="chroma-method-note" class="note"></p>
+        </details>
+      </div>
+    </aside>
 
-        <div class="panel" data-panel="overview">
-          <h2>Visão geral</h2>
+    <!-- ────── conteúdo: um painel por vez ────── -->
+    <main class="panels" id="main" tabindex="-1">
+
+      <section class="panel" data-panel="overview">
+        <h2>Visão geral</h2>
+        <div id="overview-summary" class="summary-grid"></div>
+        <div class="block">
+          <h3>Propriedades do manifest</h3>
           <div id="overview"></div>
-          <details class="raw-details">
-            <summary>Manifest bruto</summary>
-            <pre id="raw-manifest"></pre>
-          </details>
         </div>
+        <details class="raw-details">
+          <summary>Manifest bruto</summary>
+          <pre id="raw-manifest"></pre>
+        </details>
+      </section>
 
-        <div class="panel" data-panel="video" hidden>
-          <h2>Vídeo — variantes / representações</h2>
-          <div id="video-table"></div>
-        </div>
+      <section class="panel" data-panel="video" hidden>
+        <h2>Vídeo <span class="h2-sub">variantes / representações</span></h2>
+        <div id="video-table"></div>
+      </section>
 
-        <div class="panel" data-panel="audio" hidden>
-          <h2>Áudio</h2>
-          <div id="audio-table"></div>
-        </div>
+      <section class="panel" data-panel="audio" hidden>
+        <h2>Áudio <span class="h2-sub">faixas declaradas</span></h2>
+        <div id="audio-table"></div>
+      </section>
 
-        <div class="panel" data-panel="legendas" hidden>
-          <h2>Legendas e closed captions</h2>
+      <section class="panel" data-panel="legendas" hidden>
+        <h2>Legendas &amp; DRM</h2>
+        <div class="block" data-block="Legendas">
+          <h3>Legendas e closed captions</h3>
           <div id="subs-table"></div>
-          <h2 style="margin-top:28px;">DRM e criptografia</h2>
+        </div>
+        <div class="block" data-block="DRM">
+          <h3>DRM e criptografia</h3>
           <div id="drm-table"></div>
         </div>
+      </section>
 
-        <div class="panel" data-panel="segmentacao" hidden>
-          <section id="sec-segments">
-            <h2>Segmentação</h2>
-            <div class="two-col">
-              <div id="seg-overview"></div>
-              <div>
-                <h3>Duração dos segmentos ao longo da linha do tempo</h3>
-                <div id="seg-chart"></div>
-              </div>
+      <section class="panel" data-panel="segmentacao" hidden>
+        <h2>Segmentação</h2>
+        <div id="sec-segments" class="block" data-block="Segmentos">
+          <div class="two-col">
+            <div id="seg-overview"></div>
+            <div>
+              <h3>Duração dos segmentos na linha do tempo</h3>
+              <div id="seg-chart"></div>
             </div>
-            <h3>Segmentos <span class="hint">(últimos 3 — em execução)</span></h3>
-            <div id="seg-table"></div>
-            <details id="seg-table-older-wrap" class="raw-details" hidden>
-              <summary id="seg-table-older-summary">Ver os demais segmentos</summary>
-              <div id="seg-table-older"></div>
-            </details>
-            <p id="seg-table-note" class="empty-note"></p>
-          </section>
-
-          <section id="sec-container" hidden>
-            <h2>Container real <span class="badge badge-info">inspeção binária</span></h2>
-            <p class="note">Lido diretamente dos bytes de um segmento de amostra (não do manifest) — revela o que
-              realmente está no arquivo, incluindo casos em que o manifest não declara tudo (áudio muxado,
-              criptografia via <code>pssh</code>/<code>tenc</code> sem <code>ContentProtection</code>, etc.).</p>
-            <div id="container-overview"></div>
-            <h3>Streams / tracks encontrados</h3>
-            <div id="container-table"></div>
-            <p id="container-note" class="note"></p>
-          </section>
-
-          <section id="sec-adbreaks" hidden>
-            <h2>Marcadores de anúncio (SCTE-35) <span class="badge badge-info">manifest</span></h2>
-            <p class="note">Detectado no próprio manifest — <code>EXT-X-DATERANGE</code>/<code>CUE-OUT</code>/<code>CUE-IN</code> (HLS)
-              ou <code>EventStream</code> (DASH). Complementa (não substitui) o PID SCTE-35 já detectado na inspeção de container.</p>
-            <div id="adbreaks-table"></div>
-          </section>
+          </div>
+          <h3>Segmentos <span class="hint">últimos 3, em execução</span></h3>
+          <div id="seg-table"></div>
+          <details id="seg-table-older-wrap" class="raw-details" hidden>
+            <summary id="seg-table-older-summary">Ver os demais segmentos</summary>
+            <div id="seg-table-older"></div>
+          </details>
+          <p id="seg-table-note" class="empty-note"></p>
         </div>
 
-        <div class="panel" data-panel="encoding" hidden>
-          <h2>Codificação de vídeo <span class="badge badge-info">inspeção binária</span></h2>
-          <p class="note">Keyframe/GOP extraídos de um segmento de mídia real (não do manifest) — nível de <em>container</em>:
-            lê o que o próprio formato já declara sobre cada amostra (<code>trun.sample_flags</code> no fMP4 fragmentado,
-            <code>random_access_indicator</code> no MPEG-TS), sem decodificar o vídeo.</p>
-          <div id="encoding-overview"></div>
-          <h3>Estrutura de GOP <span class="hint">(barra = 1 frame; altura ∝ tamanho; destaque = keyframe)</span></h3>
+        <div id="sec-container" class="block" data-block="Container" hidden>
+          <h3>Container real <span class="badge badge-info">inspeção binária</span></h3>
+          <p class="note">Lido dos bytes de um segmento de amostra, não do manifest. Revela o que está de fato no
+            arquivo, inclusive o que o manifest não declara (áudio muxado, criptografia via
+            <code>pssh</code>/<code>tenc</code> sem <code>ContentProtection</code>).</p>
+          <div id="container-overview"></div>
+          <h4>Streams / tracks encontrados</h4>
+          <div id="container-table"></div>
+          <p id="container-note" class="note"></p>
+        </div>
+
+        <div id="sec-adbreaks" class="block" data-block="Anúncios" hidden>
+          <h3>Marcadores de anúncio (SCTE-35) <span class="badge badge-info">manifest</span></h3>
+          <p class="note">Detectado no manifest: <code>EXT-X-DATERANGE</code>/<code>CUE-OUT</code>/<code>CUE-IN</code> (HLS)
+            ou <code>EventStream</code> (DASH). Complementa o PID SCTE-35 da inspeção de container.</p>
+          <div id="adbreaks-table"></div>
+        </div>
+        <p class="empty-note panel-empty">Sem dados de segmentação para esta sessão.</p>
+      </section>
+
+      <section class="panel" data-panel="encoding" hidden>
+        <h2>Codificação de vídeo <span class="badge badge-info">inspeção binária</span></h2>
+        <p class="note">Keyframe e GOP extraídos de um segmento de mídia real, em nível de container
+          (<code>trun.sample_flags</code> no fMP4, <code>random_access_indicator</code> no MPEG-TS), sem decodificar o vídeo.</p>
+        <div id="encoding-overview"></div>
+        <div class="block">
+          <h3>Estrutura de GOP <span class="hint">barra = 1 frame · altura ∝ tamanho · destaque = keyframe</span></h3>
           <div id="encoding-gop-chart"></div>
           <div id="encoding-summary"></div>
-          <details>
-            <summary>Sobre este método ▾</summary>
-            <p class="note">Identifica corretamente keyframe vs. não-keyframe (e portanto a estrutura de GOP), mas não
-              distingue frames P de B — o container só declara "depende de outra amostra" ou não, não o tipo exato de
-              predição. Para MPEG-TS, o tamanho de cada frame é aproximado pelos bytes entre início de pacotes PES
-              consecutivos no PID de vídeo, e a duração usa o PTS decodificado do cabeçalho PES.</p>
-            <p id="encoding-note" class="note"></p>
-          </details>
         </div>
+        <details>
+          <summary>Sobre este método</summary>
+          <p class="note">Identifica keyframe × não-keyframe (e portanto a estrutura de GOP), mas não distingue
+            frames P de B: o container só declara se a amostra depende de outra. No MPEG-TS, o tamanho de cada frame
+            é aproximado pelos bytes entre inícios de pacotes PES no PID de vídeo, e a duração usa o PTS do cabeçalho PES.</p>
+          <p id="encoding-note" class="note"></p>
+        </details>
+      </section>
 
-        <div class="panel" data-panel="telemetria" hidden>
-          <h2>Telemetria &amp; rede</h2>
-          <div class="two-col">
+      <section class="panel" data-panel="telemetria" hidden>
+        <h2>Telemetria &amp; rede</h2>
+        <div class="block" data-block="Buffer e bitrate">
+          <div class="two-col even">
             <div>
-              <h3>Buffer de reprodução <span class="hint">(intervalos reais de video.buffered)</span></h3>
+              <h3>Buffer de reprodução <span class="hint">intervalos reais de video.buffered</span></h3>
               <div id="buffer-timeline"></div>
               <div id="chart-buffer"></div>
             </div>
@@ -338,9 +394,11 @@
               <div id="chart-bitrate"></div>
             </div>
           </div>
-          <div class="two-col">
+        </div>
+        <div class="block" data-block="Segmentos">
+          <div class="two-col even">
             <div>
-              <h3>TTFB por segmento <span class="hint">(via Resource Timing quando disponível; senão, do motor)</span></h3>
+              <h3>TTFB por segmento <span class="hint">Resource Timing quando disponível; senão, do motor</span></h3>
               <div id="chart-ttfb"></div>
             </div>
             <div>
@@ -348,16 +406,25 @@
               <div id="chart-throughput"></div>
             </div>
           </div>
-          <h3>Breakdown de rede por segmento <span class="hint">(DNS/TCP/TLS via Resource Timing API — independente do motor)</span></h3>
-          <div id="network-breakdown-table"></div>
-          <h3>CDN / edge <span class="hint">(headers de cache/PoP — só disponível via proxy local ou quando a origem expõe via CORS; não alcança o &lt;video&gt; nativo do progressivo do YouTube)</span></h3>
-          <div id="cdn-table"></div>
-          <h3>CMCD / CMSD <span class="hint">(dados operacionais padronizados trocados com o CDN)</span></h3>
-          <div id="cmcd-overview"></div>
+          <h3>Breakdown de rede por segmento <span class="hint">DNS/TCP/TLS via Resource Timing API</span></h3>
+          <div id="network-breakdown-table" data-empty="Aguardando o primeiro segmento."></div>
         </div>
+        <div class="block" data-block="CDN">
+          <h3>CDN / edge <span class="hint">headers de cache/PoP</span></h3>
+          <p class="note">Disponível via proxy local ou quando a origem expõe os headers por CORS. Não alcança o
+            &lt;video&gt; nativo do progressivo do YouTube.</p>
+          <div id="cdn-table" data-empty="Nenhum header de CDN observado nesta sessão."></div>
+        </div>
+        <div class="block" data-block="CMCD / CMSD">
+          <h3>CMCD / CMSD <span class="hint">dados operacionais trocados com o CDN</span></h3>
+          <div id="cmcd-overview" data-empty="Nenhum dado CMCD/CMSD observado ainda."></div>
+        </div>
+      </section>
 
-        <div class="panel" data-panel="audiovivo" hidden>
-          <h2>Áudio em tempo real</h2>
+      <section class="panel" data-panel="audiovivo" hidden>
+        <h2>Áudio em tempo real</h2>
+        <div class="block" data-block="Níveis">
+          <h3>Nível por canal</h3>
           <p id="audio-note" class="note warn"></p>
           <div class="vu-wrap">
             <div class="vu-row" id="vu-l">
@@ -371,16 +438,9 @@
               <span class="vu-db">—</span>
             </div>
           </div>
-          <div class="tiles">
-            <div class="tile"><span class="tile-label">LUFS Momentary</span><span class="tile-value" id="tile-lufs-m">—</span></div>
-            <div class="tile"><span class="tile-label">LUFS Short-term</span><span class="tile-value" id="tile-lufs-s">—</span></div>
-            <div class="tile"><span class="tile-label">LUFS Integrated</span><span class="tile-value" id="tile-lufs-i">—</span></div>
-            <div class="tile"><span class="tile-label">True Peak</span><span class="tile-value" id="tile-truepeak">—</span></div>
-          </div>
-          <p id="lufs-note" class="note"></p>
-          <div class="two-col">
+          <div class="two-col even">
             <div>
-              <h3>Nível RMS por canal <span class="hint">(VU rápido — não é LUFS)</span></h3>
+              <h3>Nível RMS por canal <span class="hint">VU rápido, não é LUFS</span></h3>
               <div id="chart-audio-level"></div>
             </div>
             <div>
@@ -388,10 +448,21 @@
               <div id="chart-spectrum"></div>
             </div>
           </div>
-          <h3>LUFS ao longo do tempo <span class="hint">(ITU-R BS.1770-4 — K-weighting real)</span></h3>
+        </div>
+        <div class="block" data-block="Loudness">
+          <h3>Loudness <span class="hint">ITU-R BS.1770-4, K-weighting real</span></h3>
+          <div class="tiles">
+            <div class="tile"><span class="tile-label">LUFS Momentary</span><span class="tile-value" id="tile-lufs-m">—</span></div>
+            <div class="tile"><span class="tile-label">LUFS Short-term</span><span class="tile-value" id="tile-lufs-s">—</span></div>
+            <div class="tile"><span class="tile-label">LUFS Integrated</span><span class="tile-value" id="tile-lufs-i">—</span></div>
+            <div class="tile"><span class="tile-label">True Peak</span><span class="tile-value" id="tile-truepeak">—</span></div>
+          </div>
+          <p id="lufs-note" class="note"></p>
           <div id="chart-lufs"></div>
-
-          <h3>Diálogo × ambiente <span class="hint">(Mid/Side + banda vocal ~200Hz–4kHz — aproximação, não é separação de fonte real)</span></h3>
+        </div>
+        <div class="block" data-block="Diálogo × ambiente">
+          <h3>Diálogo × ambiente <span class="hint">Mid/Side + banda vocal ~200 Hz–4 kHz, aproximação</span></h3>
+          <p id="narration-note" class="note warn"></p>
           <div class="vu-wrap">
             <div class="vu-row" id="vu-narration">
               <span class="vu-ch">D</span>
@@ -406,65 +477,68 @@
           </div>
           <div class="tiles">
             <div class="tile"><span class="tile-label">Diálogo − Ambiente (agora)</span><span class="tile-value" id="tile-narration-delta">—</span></div>
-          </div>
-          <h3>Amplitude ao longo do tempo <span class="hint">(RMS em dBFS)</span></h3>
-          <div id="chart-narration"></div>
-          <div class="tiles">
             <div class="tile"><span class="tile-label">Média do diálogo</span><span class="tile-value" id="tile-dialogue-mean">—</span></div>
             <div class="tile"><span class="tile-label">Mediana do diálogo</span><span class="tile-value" id="tile-dialogue-median">—</span></div>
             <div class="tile"><span class="tile-label">Média do ambiente</span><span class="tile-value" id="tile-ambient-mean">—</span></div>
             <div class="tile"><span class="tile-label">Mediana do ambiente</span><span class="tile-value" id="tile-ambient-median">—</span></div>
           </div>
-          <p class="note">Média/mediana calculadas desde o início da reprodução (janela de até ~15min).</p>
-          <p id="narration-note" class="note warn"></p>
-          <label class="narration-preview-toggle"><input type="checkbox" id="narration-preview-toggle" /> Ouvir só o diálogo isolado (silencia o resto do mix)</label>
+          <p class="note">Média e mediana calculadas desde o início da reprodução (janela de até ~15 min).</p>
+          <h3>Amplitude ao longo do tempo <span class="hint">RMS em dBFS</span></h3>
+          <div id="chart-narration"></div>
+          <label class="check narration-preview-toggle"><input type="checkbox" id="narration-preview-toggle" /> Ouvir só o diálogo isolado (silencia o resto do mix)</label>
           <details>
-            <summary>Sobre este método ▾</summary>
-            <p class="note">Deriva Mid = (L+R)/2 e Side = (L−R)/2 do sinal estéreo, depois aplica um passa-banda
-              ~200Hz–4kHz (faixa de inteligibilidade da fala) sobre o Mid como proxy de diálogo/narração.
-              <strong>Não é separação de fonte real</strong> — isso exigiria um modelo de IA treinado (ex.:
-              Spleeter/Demucs) rodando offline, inviável em tempo real no navegador. Funciona bem quando a
-              fala (narração em off ou diálogo de cena, como em novelas) está mixada no centro — prática comum
-              em dublagem/voice-over e na maioria das mixagens de ficção — e música/efeitos têm largura
-              estéreo; não funciona em fonte mono (sem conteúdo lateral) nem se a fala estiver panorâmica —
-              nesses casos um aviso aparece acima.</p>
+            <summary>Sobre este método</summary>
+            <p class="note">Deriva Mid = (L+R)/2 e Side = (L−R)/2 do sinal estéreo e aplica um passa-banda
+              ~200 Hz–4 kHz (faixa de inteligibilidade da fala) sobre o Mid como proxy de diálogo/narração.
+              <strong>Não é separação de fonte real</strong>, que exigiria um modelo treinado (Spleeter/Demucs)
+              rodando offline. Funciona bem quando a fala está mixada no centro e música/efeitos têm largura
+              estéreo; não funciona em fonte mono nem com fala panorâmica. Nesses casos um aviso aparece acima.</p>
           </details>
         </div>
+      </section>
 
-        <div class="panel" data-panel="cor" hidden>
-          <h2>Análise de cor — SDR / HDR</h2>
+      <section class="panel" data-panel="cor" hidden>
+        <h2>Cor &amp; HDR</h2>
+        <div class="block" data-block="Sinalização">
+          <h3>Sinalização HDR × display</h3>
           <div id="hdr-overview"></div>
           <p id="color-note-hdr" class="note"></p>
           <p id="color-note-runtime" class="note warn"></p>
-          <h3>Espaço de cor realmente decodificado <span class="hint">(WebCodecs — sem passar por canvas/tone-mapping; hoje só Chromium)</span></h3>
+          <h3>Espaço de cor realmente decodificado <span class="hint">WebCodecs, sem canvas/tone-mapping; hoje só Chromium</span></h3>
           <div id="colorspace-overview"></div>
-          <div class="two-col">
+        </div>
+        <div class="block" data-block="Histogramas">
+          <div class="two-col even">
             <div>
-              <h3>Curvas de cor por canal (histograma RGB do frame)</h3>
+              <h3>Histograma RGB do frame</h3>
               <div id="chart-rgb"></div>
             </div>
             <div>
-              <h3>Distribuição de luminância (Rec.709)</h3>
+              <h3>Distribuição de luminância <span class="hint">Rec.709</span></h3>
               <div id="chart-luma"></div>
             </div>
           </div>
-          <h3>Evolução temporal — luminância média e clipping</h3>
+          <h3>Luminância média e clipping ao longo do tempo</h3>
           <div id="chart-luma-t"></div>
-
-          <h3>Análise de qualidade — PSNR / SSIM com referência</h3>
+        </div>
+        <div class="block" data-block="Cromaticidade">
+          <h3>Cromaticidade CIE xyY 3D <span class="hint">luminância no eixo Y · arraste para girar</span></h3>
+          <div id="chart-chroma-3d"></div>
+        </div>
+        <div class="block" data-block="PSNR / SSIM">
+          <h3>Qualidade com referência: PSNR / SSIM</h3>
           <p class="note">Requer uma referência (mezzanine) do <strong>mesmo conteúdo-fonte</strong> usado para
-            codificar o stream — comparar contra um vídeo diferente produz números sem significado (mede diferença
-            de conteúdo, não de qualidade). Isto é PSNR/SSIM reais; <strong>não é VMAF</strong> (o modelo certificado
-            da Netflix exige <code>libvmaf</code> via ffmpeg, offline — fora do escopo do navegador).</p>
+            codificar o stream; contra um vídeo diferente os números não têm significado.
+            São PSNR/SSIM reais, <strong>não VMAF</strong> (que exige <code>libvmaf</code> via ffmpeg, offline).</p>
           <div class="quality-controls">
-            <label>Referência:
-              <select id="quality-ref-preset">
+            <label>Referência
+              <select id="quality-ref-preset" class="track-select">
                 <optgroup label="Presets (Blender Foundation, CC-BY)"></optgroup>
                 <option value="local">Arquivo local…</option>
               </select>
             </label>
             <input type="file" id="quality-ref-file" accept="video/*" hidden />
-            <label>Variante do stream: <select id="quality-variant"></select></label>
+            <label>Variante do stream <select id="quality-variant" class="track-select"></select></label>
             <button type="button" id="btn-quality-start" class="btn-secondary">Iniciar comparação</button>
             <button type="button" id="btn-quality-stop" class="btn-secondary">Parar</button>
             <span id="quality-status" class="hint"></span>
@@ -475,7 +549,7 @@
             <div class="tile"><span class="tile-label">PSNR atual</span><span class="tile-value" id="tile-psnr">—</span></div>
             <div class="tile"><span class="tile-label">SSIM atual</span><span class="tile-value" id="tile-ssim">—</span></div>
           </div>
-          <div class="two-col">
+          <div class="two-col even">
             <div>
               <h3>PSNR ao longo do tempo</h3>
               <div id="chart-quality-psnr"></div>
@@ -485,52 +559,43 @@
               <div id="chart-quality-ssim"></div>
             </div>
           </div>
-
-          <h3>Cromaticidade CIE xyY 3D — luminância no eixo Y</h3>
-          <p class="note">Mesma amostragem do diagrama fixo de cromaticidade, com a luminância de cada pixel como terceiro eixo —
-            arraste com o mouse sobre o gráfico para girar a visualização.</p>
-          <div id="chart-chroma-3d"></div>
         </div>
+      </section>
 
-        <div class="panel" data-panel="qoe" hidden>
-          <h2>Relatório da sessão (QoE)
-            <span class="export-btns">
-              <button type="button" id="btn-export-json" class="btn-secondary">Exportar JSON</button>
-              <button type="button" id="btn-export-csv" class="btn-secondary">Exportar CSV</button>
-            </span>
-          </h2>
-          <div class="tiles">
-            <div class="tile"><span class="tile-label">Startup (1º frame)</span><span class="tile-value" id="qoe-startup">—</span></div>
-            <div class="tile"><span class="tile-label">Tempo assistido</span><span class="tile-value" id="qoe-watch">—</span></div>
-            <div class="tile"><span class="tile-label">Rebuffers (n / total)</span><span class="tile-value" id="qoe-rebuffers">—</span></div>
-            <div class="tile"><span class="tile-label">Ratio de rebuffering</span><span class="tile-value" id="qoe-ratio">—</span></div>
-            <div class="tile"><span class="tile-label">Trocas ABR</span><span class="tile-value" id="qoe-switches">—</span></div>
-            <div class="tile"><span class="tile-label">Bitrate médio (ponderado)</span><span class="tile-value" id="qoe-avgbitrate">—</span></div>
-            <div class="tile"><span class="tile-label">FPS real / nominal</span><span class="tile-value" id="qoe-fps">—</span></div>
-            <div class="tile"><span class="tile-label">Frames perdidos / total</span><span class="tile-value" id="qoe-dropped">—</span></div>
-          </div>
+      <section class="panel" data-panel="qoe" hidden>
+        <h2>Relatório da sessão (QoE)
+          <span class="export-btns">
+            <button type="button" id="btn-export-json" class="btn-secondary">Exportar JSON</button>
+            <button type="button" id="btn-export-csv" class="btn-secondary">Exportar CSV</button>
+          </span>
+        </h2>
+        <div class="tiles tiles-lg">
+          <div class="tile"><span class="tile-label">Startup (1º frame)</span><span class="tile-value" id="qoe-startup">—</span></div>
+          <div class="tile"><span class="tile-label">Tempo assistido</span><span class="tile-value" id="qoe-watch">—</span></div>
+          <div class="tile"><span class="tile-label">Rebuffers (n / total)</span><span class="tile-value" id="qoe-rebuffers">—</span></div>
+          <div class="tile"><span class="tile-label">Ratio de rebuffering</span><span class="tile-value" id="qoe-ratio">—</span></div>
+          <div class="tile"><span class="tile-label">Trocas ABR</span><span class="tile-value" id="qoe-switches">—</span></div>
+          <div class="tile"><span class="tile-label">Bitrate médio (ponderado)</span><span class="tile-value" id="qoe-avgbitrate">—</span></div>
+          <div class="tile"><span class="tile-label">FPS real / nominal</span><span class="tile-value" id="qoe-fps">—</span></div>
+          <div class="tile"><span class="tile-label">Frames perdidos / total</span><span class="tile-value" id="qoe-dropped">—</span></div>
         </div>
+      </section>
 
-        <div class="panel" data-panel="historico" hidden>
-          <h2>Histórico de testes</h2>
-          <p id="history-note" class="note"></p>
-          <ul id="history-list" class="history-list"></ul>
-        </div>
+      <section class="panel" data-panel="historico" hidden>
+        <h2>Histórico de testes</h2>
+        <p id="history-note" class="note">Nenhum teste salvo ainda.</p>
+        <ul id="history-list" class="history-list"></ul>
+      </section>
 
-      </div>
-    </div>
+    </main>
   </div>
 
-  <footer class="wrap app-footer">
-    <p>Stream inspector HLS e DASH com hls.js e Shaka em versões de produção e mais atuais, que geram análises de vídeo, áudio e rede.</p>
-  </footer>
-
-  <!-- hls.js/Shaka NÃO são mais carregados aqui de forma estática: existem 2
+  <!-- hls.js/Shaka NÃO são carregados aqui de forma estática: existem 2
        versões de cada (ver ENGINE_BUNDLES em app.js) e só uma pode ocupar
        window.Hls/window.shaka por vez — o combo-box de motor carrega a
        escolhida sob demanda. dash.all.min.js continua estático: é usado só
        pelo comparador de qualidade PSNR/SSIM (função independente do motor
-       principal), não pelo player do quadro de monitoração. -->
+       principal), não pelo player do monitor. -->
   <script src="vendor/dash.all.min.js"></script>
   <script src="vendor/clappr/clappr-core.min.js"></script>
   <script src="vendor/clappr/clappr-plugins.min.js"></script>
@@ -546,31 +611,7 @@
   <script src="js/qoe.js"></script>
   <script src="js/netmon.js"></script>
   <script src="js/colorspace.js"></script>
+  <script src="js/ui.js"></script>
   <script src="js/app.js"></script>
-  <script>
-    // ── Controlador do menu lateral (cockpit) ──
-    // Mostra um painel de detalhe por vez; o quadro de monitoração (sticky)
-    // permanece sempre visível. Esconder painéis é seguro: os gráficos usam
-    // ResizeObserver e se redesenham no tamanho certo ao reaparecer.
-    (function () {
-      const nav = document.getElementById('side-nav');
-      if (!nav) return;
-      const buttons = [...nav.querySelectorAll('button[data-nav]')];
-      const panels = [...document.querySelectorAll('.panel[data-panel]')];
-      function select(name) {
-        for (const b of buttons) b.classList.toggle('active', b.dataset.nav === name);
-        for (const p of panels) p.hidden = p.dataset.panel !== name;
-        // dispara resize para forçar o ResizeObserver dos gráficos recém-exibidos
-        window.dispatchEvent(new Event('resize'));
-      }
-      // exposto pra loadHistory() (app.js) poder abrir direto no painel de
-      // histórico quando a página carrega já com sessões salvas
-      window.selectCockpitPanel = select;
-      nav.addEventListener('click', (e) => {
-        const btn = e.target.closest('button[data-nav]');
-        if (btn) select(btn.dataset.nav);
-      });
-    })();
-  </script>
 </body>
 </html>

@@ -363,6 +363,8 @@ function renderBadges(model) {
   if ((model.drm || []).length && model.drm.some((d) => d.system !== 'Sem criptografia')) {
     box.appendChild(badge('DRM/Criptografia', 'drm'));
   }
+  // resumo da Visão geral + contadores do menu (ui.js)
+  UI.onModel(model);
 }
 
 /** "1920x1080" → 2073600 (pixels totais) — usado só para ordenar, não pra exibir. */
@@ -875,8 +877,13 @@ function updateTiles(t) {
   const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
   state.lastQuality = q; // reaproveitado pelo tick para o delta/log de dropped frames
   if (q) $('#tile-dropped').textContent = `${q.droppedVideoFrames} / ${q.totalVideoFrames}`;
-  const states = video.paused ? 'pausado' : video.readyState < 3 ? 'carregando' : 'reproduzindo';
+  // um erro fatal sinalizado sob o player (UI.playerNotice) prevalece sobre
+  // "pausado" — senão o tile esconderia a falha
+  const notice = $('#player-notice');
+  const failed = !notice.hidden && notice.dataset.kind === 'error';
+  const states = failed ? 'erro' : video.paused ? 'pausado' : video.readyState < 3 ? 'carregando' : 'tocando';
   $('#tile-state').textContent = states;
+  $('#tile-state').dataset.state = states;
 }
 
 // Tolerância de ±2 dB em torno do alvo integrado é definida pela própria
@@ -898,6 +905,7 @@ function setupAlertEngine(model, isLive) {
   const engine = new AlertEngine({
     listEl: $('#alert-list'),
     onLog: logEvent,
+    onRender: UI.onAlerts,
     thresholds: readThresholds(),
   });
   const th = () => engine.thresholds;
@@ -1794,6 +1802,7 @@ async function startPlayback(type, url, model, isLive, progressiveMimeType) {
       kind = await ensureEngineLoaded(state.engine);
     } catch (e) {
       logEvent('Falha ao carregar o motor de playback: ' + e.message);
+      UI.playerNotice('Falha ao carregar o motor de playback: ' + e.message);
       return;
     }
     if (kind === 'hls') {
@@ -1825,12 +1834,14 @@ async function startPlayback(type, url, model, isLive, progressiveMimeType) {
     instance = await waitForEngineInstance(clapprPlayer, kind);
   } catch (e) {
     logEvent(e.message);
+    UI.playerNotice(e.message);
     return;
   }
   state.player = instance;
   state.playerKind = kind;
   const video = videoEl();
   video.addEventListener('waiting', () => logEvent('Rebuffering (waiting)…'));
+  video.addEventListener('playing', () => UI.playerNotice(null)); // recuperou: limpa o aviso
 
   if (kind === 'hls') {
     const hls = instance;
@@ -1847,6 +1858,7 @@ async function startPlayback(type, url, model, isLive, progressiveMimeType) {
     hls.on(Hls.Events.ERROR, (_, d) => {
       logEvent(`Erro hls.js [${d.type}/${d.details}]${d.fatal ? ' (FATAL)' : ''}`);
       if (d.fatal) {
+        UI.playerNotice(`Erro fatal do hls.js: ${d.details} (${d.type}). Veja a aba Eventos.`);
         if (d.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
         else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
       }
@@ -1860,6 +1872,7 @@ async function startPlayback(type, url, model, isLive, progressiveMimeType) {
     shakaPlayer.addEventListener('error', (e) => {
       const detail = e.detail || {};
       logEvent(`Erro Shaka [código ${detail.code}]${detail.severity >= 2 ? ' (FATAL)' : ''}`);
+      if (detail.severity >= 2) UI.playerNotice(`Erro fatal do Shaka: código ${detail.code}. Veja a aba Eventos.`);
     });
     shakaPlayer.addEventListener('adaptation', () => {
       const active = shakaPlayer.getVariantTracks().find((t) => t.active);
@@ -1876,7 +1889,10 @@ async function startPlayback(type, url, model, isLive, progressiveMimeType) {
   }
 
   video.muted = true;
-  video.play().catch(() => logEvent('Autoplay bloqueado — clique no player para iniciar.'));
+  video.play().catch(() => {
+    logEvent('Autoplay bloqueado — clique no player para iniciar.');
+    if ($('#player-notice').hidden) UI.playerNotice('Autoplay bloqueado pelo navegador. Clique no player para iniciar.', 'info');
+  });
 
   startTelemetry(model, isLive);
 }
@@ -1910,6 +1926,7 @@ function logEvent(msg) {
   const li = el('li');
   li.appendChild(el('span', 'ev-time', new Date().toLocaleTimeString('pt-BR')));
   li.appendChild(el('span', null, ' ' + msg));
+  UI.onEvent(li, msg); // destaca erros/alertas no log
   ul.prepend(li);
   while (ul.children.length > 200) ul.removeChild(ul.lastChild);
 }
@@ -2196,7 +2213,7 @@ async function inspectYouTube(url) {
 
   // VOD progressivo: tabelas a partir do JSON do yt-dlp + player no arquivo.
   const model = StreamYouTube.buildModelFromYtInfo(info);
-  $('#results').hidden = false;
+  UI.showSession({ url });
   renderBadges(model);
   renderKV($('#overview'), { ...model.overview, 'URL': url, 'Formato reproduzido': `${src.height || '—'}p (melhor progressivo combinado)` });
   $('#raw-manifest').textContent = JSON.stringify(info, null, 2).slice(0, 200000);
@@ -2254,7 +2271,7 @@ async function inspect(url) {
       model.qualityVariants = [{ id: '1', uri: url, resolution: 'Playlist única', bandwidth: null }];
     }
 
-    $('#results').hidden = false;
+    UI.showSession({ url });
     renderBadges(model);
     renderKV($('#overview'), { ...model.overview, 'SCTE-35': model.overview['SCTE-35'] || 'Verificando…', 'URL': url, 'Obtido via': proxied ? 'proxy local (/p/)' : 'fetch direto' });
     $('#raw-manifest').textContent = text.length > 200000 ? text.slice(0, 200000) + '\n… (truncado)' : text;
@@ -2395,26 +2412,33 @@ async function loadHistory() {
 }
 
 function renderHistoryList(items) {
-  const list = $('#history-list');
-  list.innerHTML = '';
-  if (!items.length) return;
-  $('#history-note').textContent = `${items.length} teste${items.length > 1 ? 's' : ''} recente${items.length > 1 ? 's' : ''} — clique para reabrir (somente leitura, sem player).`;
-  for (const item of items) {
-    const li = el('li');
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'history-item';
-    const time = el('span', 'hi-time', new Date(item.ts).toLocaleString('pt-BR'));
-    const urlEl = el('span', 'hi-url', item.url);
-    const tags = el('span', 'hi-tags');
-    tags.appendChild(badge(item.protocol || '—', 'info'));
-    tags.appendChild(badge(item.live ? 'AO VIVO' : 'VOD', item.live ? 'live' : 'ok'));
-    if (item.hdr && item.hdr !== 'SDR') tags.appendChild(badge('HDR: ' + item.hdr, 'hdr'));
-    if (item.drm && item.drm !== 'Nenhuma') tags.appendChild(badge('DRM', 'drm'));
-    btn.append(time, urlEl, tags);
-    btn.addEventListener('click', () => restoreHistoryEntry(item));
-    li.appendChild(btn);
-    list.appendChild(li);
+  UI.setHistoryCount(items.length);
+  const note = items.length
+    ? `${items.length} teste${items.length > 1 ? 's' : ''} recente${items.length > 1 ? 's' : ''}. Clique para reabrir (somente leitura, sem player).`
+    : 'Nenhum teste salvo ainda.';
+  $('#history-note').textContent = note;
+  $('#home-history-note').hidden = items.length > 0;
+  // mesma lista em dois lugares: painel Histórico (sessão) e tela inicial
+  for (const list of [$('#history-list'), $('#home-history')]) {
+    list.innerHTML = '';
+    for (const item of items) {
+      const li = el('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'history-item';
+      const time = el('span', 'hi-time', new Date(item.ts).toLocaleString('pt-BR'));
+      const urlEl = el('span', 'hi-url', item.url);
+      urlEl.title = item.url;
+      const tags = el('span', 'hi-tags');
+      tags.appendChild(badge(item.protocol || '—', 'info'));
+      tags.appendChild(badge(item.live ? 'AO VIVO' : 'VOD', item.live ? 'live' : 'ok'));
+      if (item.hdr && item.hdr !== 'SDR') tags.appendChild(badge('HDR: ' + item.hdr, 'hdr'));
+      if (item.drm && item.drm !== 'Nenhuma') tags.appendChild(badge('DRM', 'drm'));
+      btn.append(urlEl, time, tags);
+      btn.addEventListener('click', () => restoreHistoryEntry(item));
+      li.appendChild(btn);
+      list.appendChild(li);
+    }
   }
 }
 
@@ -2425,11 +2449,11 @@ function restoreHistoryEntry(item) {
   state.lastPlay = null;
   for (const k of Object.keys(state.charts)) destroyChart(k);
   const model = item.summary;
-  $('#results').hidden = false;
-  // o painel de Histórico pode estar ativo no momento do clique — troca pra
-  // Visão geral, que é quem acabou de ser (re)preenchido logo abaixo.
-  if (window.selectCockpitPanel) window.selectCockpitPanel('overview');
-  setStatus('Sessão histórica de ' + new Date(item.ts).toLocaleString('pt-BR') + ' — somente leitura, sem player.', 'busy');
+  // sessão somente leitura: esconde o monitor e abre na Visão geral, que é
+  // quem acabou de ser (re)preenchida logo abaixo.
+  UI.showSession({ url: model.overview['URL'] || item.url, readonly: true });
+  $('#url').value = item.url || '';
+  setStatus('Sessão histórica de ' + new Date(item.ts).toLocaleString('pt-BR') + ' — somente leitura, sem player. Clique em Inspecionar para medir de novo.', 'info');
   renderBadges(model);
   renderKV($('#overview'), model.overview);
   $('#raw-manifest').textContent = '(manifest bruto não é armazenado no histórico — apenas o resumo estático)';
@@ -2512,7 +2536,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#btn-export-csv').addEventListener('click', () => exportSession('csv'));
 
   // thresholds de alerta aplicados ao vivo
-  for (const id of ['th-silence', 'th-freeze', 'th-buffer', 'th-lufs']) {
+  for (const id of ['th-silence', 'th-freeze', 'th-buffer', 'th-lufs', 'th-truepeak']) {
     $('#' + id).addEventListener('change', () => {
       if (state.alertEngine) state.alertEngine.thresholds = readThresholds();
       logEvent('Thresholds de alerta atualizados.');

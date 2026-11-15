@@ -14,11 +14,12 @@
 
 class AlertEngine {
   /**
-   * @param {object} opts { listEl, onLog(msg), thresholds: {…} }
+   * @param {object} opts { listEl, onLog(msg), onRender(engine), thresholds: {…} }
    */
   constructor(opts) {
     this.listEl = opts.listEl;
     this.onLog = opts.onLog || (() => {});
+    this.onRender = opts.onRender || null; // (engine) => void — após cada render()
     this.thresholds = opts.thresholds;
     this.conditions = new Map(); // key -> def
     this.history = [];           // {key,label,severity,startT,endT|null}
@@ -87,6 +88,7 @@ class AlertEngine {
   }
 
   render() {
+    if (this.onRender) this.onRender(this);
     if (!this.listEl) return;
     this.listEl.innerHTML = '';
     if (!this.history.length) {
