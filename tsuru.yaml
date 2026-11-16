@@ -1,3 +1,0 @@
-hooks:
-  build:
-    - sh scripts/install-ytdlp.sh

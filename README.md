@@ -213,15 +213,13 @@ configurado ele nem é carregado, e `node server.js` segue funcionando sem insta
 
 ## YouTube (opcional)
 
-> **No Tsuru (experimental):** o `tsuru.yaml` roda `scripts/install-ytdlp.sh` como build
-> hook, que baixa o binário standalone do `yt-dlp` (sem Python) para `./bin/yt-dlp`,
-> verificando o SHA-256 publicado na release. É melhor esforço: se o download falhar,
-> o deploy segue normalmente e o app só fica sem YouTube (veja o log do deploy, linhas
-> `[yt-dlp]`). `GET /api/health` mostra `ytdlp.found`. Limites conhecidos: o YouTube
-> costuma bloquear IPs de nuvem ("Sign in to confirm you're not a bot"), a saída do app
-> passa pelo proxy da plataforma, e o binário usa ~100 MB de memória enquanto resolve
-> (planos pequenos de unidade podem matar o processo). `YTDLP_PATH` aponta outro binário.
-
+> **Só funciona rodando localmente.** O resolvedor chama o `yt-dlp` como programa externo e
+> precisa de acesso de rede ao YouTube. Num container como o do Tsuru isso não existe: só há
+> Node, e o proxy de saída da plataforma recusa `youtube.com`, `github.com` e `pypi.org`
+> (testado: `CONNECT tunnel failed, response 403`), então nem dá para instalar o binário no
+> build. Quando o servidor não encontra o `yt-dlp`, a interface esconde os exemplos de
+> YouTube e explica o motivo; `GET /api/health` informa `ytdlp.available`. `YTDLP_PATH`
+> aponta um binário em outro lugar.
 
 URLs do YouTube (`youtube.com/watch`, `youtu.be`, lives) são suportadas através de
 um **resolvedor local** que delega ao [`yt-dlp`](https://github.com/yt-dlp/yt-dlp).
@@ -304,9 +302,8 @@ qualquer uma das duas, ou as duas ao mesmo tempo em portas diferentes.
 | `cmd/server/` | Ponto de entrada do backend em **Go** (`main.go`) — monta as rotas HTTP e liga os pacotes de `internal/`; equivalente a `server.js`, mesmas rotas e variáveis de ambiente. |
 | `internal/` | Pacotes Go que implementam o backend, um por responsabilidade: `proxy/` (proxy de CORS + reescrita de manifest), `security/` (bloqueio de SSRF, guard de mesma-origem), `resolve/` (resolução de YouTube via `yt-dlp`), `history/` (persistência SQLite), `static/` (serve o `public/` embedado). Cada um é o equivalente direto de uma seção do `server.js`. |
 | `assets.go` | `//go:embed` que empacota `public/` inteiro dentro do binário Go — é por isso que `go build` gera um único executável sem precisar copiar a pasta `public/` junto. |
-| `tsuru.yaml` | Build hook do Tsuru: instala o `yt-dlp` em `./bin` (melhor esforço, nunca derruba o deploy). |
 | `Procfile` | Processo `web` do Tsuru (`node server.js`). |
-| `scripts/` | `install-ytdlp.sh` (instalador do yt-dlp) e testes headless (Node puro, sem navegador) da matemática mais sensível a erro de offset/bit: `color-math-test.js` (normalização PQ/HLG, conversão de primárias) e `encoding-gop-test.js` (parsing de boxes fMP4/`trun` e pacotes MPEG-TS/PES para keyframe e GOP). |
+| `scripts/` | Testes headless (Node puro, sem navegador) da matemática mais sensível a erro de offset/bit: `color-math-test.js` (normalização PQ/HLG, conversão de primárias) e `encoding-gop-test.js` (parsing de boxes fMP4/`trun` e pacotes MPEG-TS/PES para keyframe e GOP). |
 | `go.mod` / `go.sum` | Dependências do backend Go (hoje só `modernc.org/sqlite`, driver SQLite 100% Go sem cgo, + suas dependências transitivas). |
 | `package.json` / `package-lock.json` | Metadados do projeto Node. Única dependência: `mysql2`, necessária só para o histórico em MySQL; `node server.js` funciona sem `npm install` no modo local. |
 | `.gitignore` | Exclui `node_modules/`, logs e o binário compilado do Go (`stream-inspector-server`) do controle de versão. |

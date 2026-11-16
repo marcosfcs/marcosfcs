@@ -416,13 +416,20 @@ const YT_HOSTS = /^(?:www\.|m\.)?(?:youtube\.com|youtube-nocookie\.com|youtu\.be
 // ex.: "chrome"/"safari"/"firefox") ou de um arquivo cookies.txt exportado
 // (YTDLP_COOKIES_FILE) quando configurado; sem nenhuma das duas, o yt-dlp
 // roda sem autenticação (comportamento anterior, funciona pra parte dos vídeos).
-// Onde está o yt-dlp: YTDLP_PATH (override) > ./bin/yt-dlp (instalado no build
-// do Tsuru por scripts/install-ytdlp.sh) > "yt-dlp" no PATH (instalação local).
+// Onde está o yt-dlp: YTDLP_PATH (override) > ./bin/yt-dlp > "yt-dlp" no PATH.
 const YTDLP_BIN = (() => {
   if (process.env.YTDLP_PATH) return process.env.YTDLP_PATH;
   const bundled = path.join(__dirname, 'bin', 'yt-dlp');
   try { fs.accessSync(bundled, fs.constants.X_OK); return bundled; } catch { return 'yt-dlp'; }
 })();
+// Sondagem única na subida: o front usa o resultado (GET /api/health) para
+// esconder o YouTube quando o yt-dlp não existe, em vez de deixar o usuário
+// esbarrar num erro técnico (caso do container do Tsuru, que só tem Node).
+// available: null enquanto a sondagem não terminou.
+let ytdlpProbe = { available: null, version: null };
+execFile(YTDLP_BIN, ['--version'], { timeout: 20000 }, (err, stdout) => {
+  ytdlpProbe = err ? { available: false, version: null } : { available: true, version: String(stdout).trim() };
+});
 const YTDLP_COOKIES_FILE = process.env.YTDLP_COOKIES_FILE || '';
 const YTDLP_COOKIES_FROM_BROWSER = process.env.YTDLP_COOKIES_FROM_BROWSER || '';
 function ytdlpCookieArgs() {
@@ -573,10 +580,7 @@ async function handleHistoryList(res, search) {
 /** Estado do serviço — sempre 200; serve para conferir o binding do banco após o deploy. */
 function handleHealth(res) {
   res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-  // found: true/false quando o yt-dlp é um caminho conhecido; null quando depende do PATH
-  let found = null;
-  if (YTDLP_BIN.includes('/')) { try { fs.accessSync(YTDLP_BIN, fs.constants.X_OK); found = true; } catch { found = false; } }
-  res.end(JSON.stringify({ ok: true, history: historyStore.describe(), ytdlp: { binary: YTDLP_BIN, found } }));
+  res.end(JSON.stringify({ ok: true, history: historyStore.describe(), ytdlp: { binary: YTDLP_BIN, ...ytdlpProbe } }));
 }
 
 function handleStatic(req, res, urlPath) {

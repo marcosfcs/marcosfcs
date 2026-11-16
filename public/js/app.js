@@ -2175,6 +2175,11 @@ function setStatus(msg, kind) {
  * e reproduz o melhor formato progressivo).
  */
 async function inspectYouTube(url) {
+  if (state.ytdlpAvailable === false) {
+    setStatus('Links do YouTube não funcionam neste servidor: o yt-dlp não está instalado aqui. ' +
+      'Cole a URL de um manifest .m3u8 ou .mpd, ou rode o inspetor na sua máquina ("node server.js") com o yt-dlp instalado.', 'error');
+    return true;
+  }
   logEvent('URL do YouTube detectada — resolvendo via yt-dlp local (uso sujeito aos Termos do YouTube).');
   setStatus('Resolvendo com yt-dlp…', 'busy');
 
@@ -2486,8 +2491,27 @@ function restoreHistoryEntry(item) {
  * Bootstrap
  * ================================================================ */
 
+/**
+ * O resolvedor de YouTube depende do yt-dlp no servidor. Quando o servidor
+ * informa que ele não existe, esconde os exemplos de YouTube e tira a menção
+ * do campo de URL — em vez de oferecer algo que só leva a um erro.
+ */
+async function loadCapabilities() {
+  try {
+    const r = await fetch('/api/health');
+    if (!r.ok) return;
+    const h = await r.json();
+    state.ytdlpAvailable = h.ytdlp ? h.ytdlp.available : null;
+  } catch { return; } // hospedagem estática, sem servidor: não sabemos, mantém tudo
+  if (state.ytdlpAvailable !== false) return;
+  for (const b of document.querySelectorAll('[data-example*="youtube.com"]')) (b.closest('li') || b).hidden = true;
+  for (const n of document.querySelectorAll('.examples-note')) n.hidden = true;
+  $('#url').placeholder = 'Cole a URL do manifest (.m3u8 ou .mpd)';
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   loadHistory();
+  loadCapabilities();
 
   $('#form').addEventListener('submit', (e) => {
     e.preventDefault();
