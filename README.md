@@ -165,12 +165,24 @@ Em plataformas com disco efêmero (Tsuru, Kubernetes) o SQLite local **não
 persiste**: cada deploy começa vazio. Use o MySQL.
 
 A conexão MySQL é lida, nesta ordem, de: `HISTORY_DATABASE_URL`,
-`DBAAS_MYSQL_ENDPOINT`, `DATABASE_URL`/`MYSQL_URL` (formato
-`mysql://usuario:senha@host:porta/banco`), ou das variáveis discretas
-`MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE_NAME`.
-A tabela `inspections` é criada sozinha na subida. Se o banco estiver configurado
-mas inacessível, o histórico responde 501 com o motivo; ele **não** cai para o
-SQLite local, que mascararia o problema.
+`DBAAS_MYSQL_ENDPOINT` (o que o bind do DBaaS injeta), `DATABASE_URL`/`MYSQL_URL`
+(só se for `mysql://…`) ou `MYSQL_HOST`. O endereço pode vir como
+`mysql://usuario:senha@host:porta/banco`, `host:porta` ou só `host`; usuário, senha
+e porta que não vierem nele são lidos de `DBAAS_MYSQL_USER`, `DBAAS_MYSQL_PASSWORD`
+e `DBAAS_MYSQL_PORT` (ou `MYSQL_USER`/`MYSQL_PASSWORD`/`MYSQL_PORT`). Sem endpoint,
+a lista `DBAAS_MYSQL_HOSTS` serve de fallback (usa o primeiro nó).
+
+**Nome do banco:** o bind do DBaaS não o informa. Ordem de resolução:
+`HISTORY_DATABASE_NAME`, o caminho da URL, `DBAAS_MYSQL_DATABASE`/`MYSQL_DATABASE_NAME`.
+Se nenhum existir, o app conecta sem schema e olha os bancos visíveis ao usuário
+(ignorando os de sistema): se houver exatamente um, usa; se não houver nenhum,
+cria `stream_inspector`; se houver vários, **não adivinha** e o `/api/health` lista
+os candidatos para você definir `HISTORY_DATABASE_NAME`.
+
+A tabela `inspections` é criada sozinha. Se o banco estiver configurado mas
+inacessível, o histórico responde 501 com o motivo; ele **não** cai para o SQLite
+local, que mascararia o problema. Se o servidor exigir conexão cifrada, defina
+`HISTORY_DATABASE_SSL=1` (liga TLS sem verificar a CA, apenas cifra).
 
 **Binding no Tsuru (DBaaS):**
 
@@ -183,7 +195,8 @@ curl https://<app>/api/health                       # history.backend = "mysql",
 ```
 
 `GET /api/health` responde sempre 200 e informa o backend do histórico, se está
-operante e qual variável o configurou (nunca o valor).
+operante, qual variável o configurou e o resumo da conexão (host, porta, usuário,
+banco e TLS; nunca a senha).
 
 **Privacidade:** o histórico é compartilhado por todos que abrem o app, então
 credenciais são mascaradas no servidor antes de gravar: valores de parâmetros como

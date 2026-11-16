@@ -5,7 +5,7 @@
  */
 'use strict';
 
-const { maskUrl, maskDeep, resolveMysqlConfig } = require('../lib/history-store');
+const { maskUrl, maskDeep, resolveMysqlConfig, parseEndpoint, describeConnection } = require('../lib/history-store');
 
 let failed = 0;
 function eq(name, got, want) {
@@ -50,22 +50,49 @@ eq('resumo aninhado',
   { overview: { URL: 'https://c.example.com/m.m3u8?token=***', Protocolo: 'HLS' },
     video: [{ id: '#1', uri: 'https://c.example.com/v1.m3u8?sig=***', bandwidth: 5 }], n: null });
 
+// ── parseEndpoint ──
+eq('host:porta', parseEndpoint('db.example.com:3306'), { host: 'db.example.com', port: 3306, user: null, password: null, database: null });
+eq('só host', parseEndpoint('db.example.com'), { host: 'db.example.com', port: null, user: null, password: null, database: null });
+eq('URL completa com senha codificada',
+  parseEndpoint('mysql://app:p%40ss@db.example.com:3307/hist'), { host: 'db.example.com', port: 3307, user: 'app', password: 'p@ss', database: 'hist' });
+eq('URL sem credenciais', parseEndpoint('mysql://db.example.com:3306'), { host: 'db.example.com', port: 3306, user: null, password: null, database: null });
+eq('esquema tcp://', parseEndpoint('tcp://10.0.0.5:3306'), { host: '10.0.0.5', port: 3306, user: null, password: null, database: null });
+eq('lista: usa o primeiro', parseEndpoint('a.example.com:3306,b.example.com:3306').host, 'a.example.com');
+eq('vazio → null', parseEndpoint('  '), null);
+eq('lixo → null', parseEndpoint('não é endereço'), null);
+
 // ── resolveMysqlConfig ──
-eq('sem variáveis → null (SQLite local)', resolveMysqlConfig({}), null);
+const cfg = (env) => resolveMysqlConfig(env);
+eq('sem variáveis → null (SQLite local)', cfg({}), null);
 eq('override manual tem prioridade',
-  resolveMysqlConfig({ HISTORY_DATABASE_URL: 'mysql://a:b@h/db', DBAAS_MYSQL_ENDPOINT: 'mysql://c:d@h2/db2' }),
-  { source: 'HISTORY_DATABASE_URL', options: { uri: 'mysql://a:b@h/db' } });
-eq('endpoint do DBaaS',
-  resolveMysqlConfig({ DBAAS_MYSQL_ENDPOINT: 'mysql://c:d@h2:3306/db2' }),
-  { source: 'DBAAS_MYSQL_ENDPOINT', options: { uri: 'mysql://c:d@h2:3306/db2' } });
-eq('DATABASE_URL de outro banco é ignorada',
-  resolveMysqlConfig({ DATABASE_URL: 'postgres://a:b@h/db' }), null);
-eq('variáveis discretas',
-  resolveMysqlConfig({ MYSQL_HOST: 'h', MYSQL_USER: 'u', MYSQL_PASSWORD: 'p', MYSQL_DATABASE_NAME: 'd' }),
+  cfg({ HISTORY_DATABASE_URL: 'mysql://a:b@h/db', DBAAS_MYSQL_ENDPOINT: 'c.example.com:3306' }),
+  { source: 'HISTORY_DATABASE_URL', options: { host: 'h', port: 3306, user: 'a', password: 'b', database: 'db' } });
+eq('DBaaS: endpoint host:porta + usuário/senha/porta soltos, banco a descobrir',
+  cfg({ DBAAS_MYSQL_ENDPOINT: 'db.example.com:3306', DBAAS_MYSQL_USER: 'u', DBAAS_MYSQL_PASSWORD: 'p', DBAAS_MYSQL_PORT: '3310' }),
+  { source: 'DBAAS_MYSQL_ENDPOINT', options: { host: 'db.example.com', port: 3306, user: 'u', password: 'p', database: null } });
+eq('DBaaS: porta solta vale quando o endpoint não a traz',
+  cfg({ DBAAS_MYSQL_ENDPOINT: 'db.example.com', DBAAS_MYSQL_USER: 'u', DBAAS_MYSQL_PASSWORD: 'p', DBAAS_MYSQL_PORT: '3310' }).options.port, 3310);
+eq('credenciais na URL vencem as variáveis soltas',
+  cfg({ DBAAS_MYSQL_ENDPOINT: 'mysql://x:y@h:3306/d', DBAAS_MYSQL_USER: 'u', DBAAS_MYSQL_PASSWORD: 'p' }).options,
+  { host: 'h', port: 3306, user: 'x', password: 'y', database: 'd' });
+eq('HISTORY_DATABASE_NAME define o banco',
+  cfg({ DBAAS_MYSQL_ENDPOINT: 'h:3306', DBAAS_MYSQL_USER: 'u', HISTORY_DATABASE_NAME: 'meu_banco' }).options.database, 'meu_banco');
+eq('DATABASE_URL de outro banco é ignorada', cfg({ DATABASE_URL: 'postgres://a:b@h/db' }), null);
+eq('variáveis discretas MYSQL_*',
+  cfg({ MYSQL_HOST: 'h', MYSQL_USER: 'u', MYSQL_PASSWORD: 'p', MYSQL_DATABASE_NAME: 'd' }),
   { source: 'MYSQL_HOST', options: { host: 'h', port: 3306, user: 'u', password: 'p', database: 'd' } });
-eq('endpoint inválido vira erro explícito',
-  resolveMysqlConfig({ DBAAS_MYSQL_ENDPOINT: 'h2:3306' }),
-  { source: 'DBAAS_MYSQL_ENDPOINT', error: 'DBAAS_MYSQL_ENDPOINT não é uma URL mysql://' });
+eq('sem endpoint: lista de nós do DBaaS como fallback',
+  cfg({ DBAAS_MYSQL_HOSTS: 'n1.example.com:3306,n2.example.com:3306', DBAAS_MYSQL_USER: 'u', DBAAS_MYSQL_PASSWORD: 'p' }).options.host, 'n1.example.com');
+eq('HOSTS sozinho (sem usuário) não configura nada', cfg({ DBAAS_MYSQL_HOSTS: 'n1:3306' }), null);
+eq('endpoint ilegível vira erro explícito',
+  cfg({ DBAAS_MYSQL_ENDPOINT: 'não é endereço' }),
+  { source: 'DBAAS_MYSQL_ENDPOINT', error: 'DBAAS_MYSQL_ENDPOINT não tem um endereço reconhecível (esperado host:porta ou mysql://…)' });
+eq('TLS opcional', !!cfg({ DBAAS_MYSQL_ENDPOINT: 'h:3306', HISTORY_DATABASE_SSL: '1' }).options.ssl, true);
+
+// ── describeConnection: nunca expõe a senha ──
+const shown = describeConnection(cfg({ DBAAS_MYSQL_ENDPOINT: 'db.example.com:3306', DBAAS_MYSQL_USER: 'u', DBAAS_MYSQL_PASSWORD: 'SENHA-SECRETA' }).options);
+eq('resumo da conexão', shown, { host: 'db.example.com', port: 3306, user: 'u', database: null, tls: false });
+eq('resumo não contém a senha', JSON.stringify(shown).includes('SENHA-SECRETA'), false);
 
 if (failed) { console.error(`\n${failed} TESTE(S) FALHARAM`); process.exit(1); }
 console.log('\nTODOS OS TESTES PASSARAM');
