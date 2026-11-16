@@ -9,5 +9,8 @@
   "engines": {
     "node": "22"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "mysql2": "^3.24.6"
+  }
 }

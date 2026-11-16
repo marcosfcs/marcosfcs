@@ -29,8 +29,8 @@ const tls = require('tls');
 const fs = require('fs');
 const path = require('path');
 const dns = require('dns');
-const os = require('os');
 const { execFile } = require('child_process');
+const { openHistoryStore, maskUrl, maskDeep } = require('./lib/history-store');
 
 const PORT = Number(process.env.PORT) || 8787;
 // Escuta só em loopback por padrão: o proxy /p/ e os endpoints de resolução
@@ -51,42 +51,13 @@ const MANIFEST_MAX_BYTES = 20 * 1024 * 1024; // manifests são pequenos; limite 
 let throttleKbps = 0;
 
 /**
- * Histórico persistente de inspeções — SQLite via `node:sqlite` (módulo
- * nativo do Node 22+, sem dependência externa nova). Guardado FORA da pasta
- * do repositório (por padrão em ~/.stream-inspector/, override via
- * STREAM_INSPECTOR_DATA_DIR) — de propósito: se ficasse dentro do clone
- * (ex.: <repo>/data/), um `git clone`/checkout novo sempre começaria com a
- * pasta vazia, apagando o histórico a cada clone. Também nunca é servido
- * como arquivo estático (fora de public/) e
- * fica fora do git de qualquer forma. Se node:sqlite não estiver disponível
- * nesta versão do Node, o histórico é desabilitado de forma explícita
- * (mesmo padrão de honestidade usado para yt-dlp/WebCodecs ausentes).
+ * Histórico persistente de inspeções — ver lib/history-store.js.
+ * MySQL quando há banco configurado por variável de ambiente (binding do
+ * Tsuru/DBaaS); senão SQLite local em ~/.stream-inspector/ (override via
+ * STREAM_INSPECTOR_DATA_DIR), fora da pasta do repositório.
  */
-const DATA_DIR = process.env.STREAM_INSPECTOR_DATA_DIR || path.join(os.homedir(), '.stream-inspector');
-let historyDb = null;
-let historyError = null;
-try {
-  const { DatabaseSync } = require('node:sqlite');
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  historyDb = new DatabaseSync(path.join(DATA_DIR, 'history.sqlite'));
-  historyDb.exec(`
-    CREATE TABLE IF NOT EXISTS inspections (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ts INTEGER NOT NULL,
-      url TEXT NOT NULL,
-      protocol TEXT,
-      live INTEGER,
-      video_variants INTEGER,
-      audio_tracks INTEGER,
-      hdr TEXT,
-      drm TEXT,
-      summary_json TEXT NOT NULL
-    )
-  `);
-} catch (e) {
-  historyError = e.message;
-  console.warn('Histórico persistente desabilitado (node:sqlite indisponível):', historyError);
-}
+const HISTORY_MAX_ROWS = Number(process.env.HISTORY_MAX_ROWS) || 500; // teto de linhas guardadas
+const historyStore = openHistoryStore({ maxRows: HISTORY_MAX_ROWS });
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -522,7 +493,6 @@ function handleResolve(res, search) {
 }
 
 const HISTORY_BODY_MAX_BYTES = 2 * 1024 * 1024; // resumo estático, não a telemetria inteira
-const HISTORY_MAX_ROWS = 500; // teto de linhas guardadas (defesa em profundidade contra DoS de disco)
 
 function readJsonBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
@@ -541,11 +511,12 @@ function readJsonBody(req, maxBytes) {
   });
 }
 
+function historyUnavailable(res, e) {
+  res.writeHead(501, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ error: 'Histórico indisponível: ' + (e && e.message ? e.message : e) }));
+}
+
 async function handleHistorySave(req, res) {
-  if (!historyDb) {
-    res.writeHead(501, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ error: 'Histórico indisponível: ' + (historyError || 'node:sqlite não carregado') }));
-  }
   let body;
   try { body = await readJsonBody(req, HISTORY_BODY_MAX_BYTES); } catch (e) {
     res.writeHead(400, { 'content-type': 'application/json' });
@@ -555,58 +526,47 @@ async function handleHistorySave(req, res) {
     res.writeHead(400, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Campos obrigatórios: url, summary.' }));
   }
+  try { await historyStore.ready(); } catch (e) { return historyUnavailable(res, e); }
   try {
-    const stmt = historyDb.prepare(`
-      INSERT INTO inspections (ts, url, protocol, live, video_variants, audio_tracks, hdr, drm, summary_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const info = stmt.run(
-      Date.now(),
-      body.url.slice(0, 2000),
-      body.protocol || null,
-      body.live ? 1 : 0,
-      Number.isFinite(body.videoVariants) ? body.videoVariants : null,
-      Number.isFinite(body.audioTracks) ? body.audioTracks : null,
-      body.hdr || null,
-      body.drm || null,
-      JSON.stringify(body.summary)
-    );
-    // poda para as N mais recentes — limita o crescimento do arquivo mesmo se
-    // o guard same-origin for contornado de algum modo
-    historyDb.prepare(
-      'DELETE FROM inspections WHERE id NOT IN (SELECT id FROM inspections ORDER BY ts DESC, id DESC LIMIT ?)'
-    ).run(HISTORY_MAX_ROWS);
+    // O histórico é compartilhado: tokens/assinaturas das URLs são mascarados
+    // ANTES de gravar (na URL principal e em qualquer URL dentro do resumo).
+    const id = await historyStore.save({
+      ts: Date.now(),
+      url: maskUrl(body.url).slice(0, 2000),
+      protocol: body.protocol || null,
+      live: body.live ? 1 : 0,
+      videoVariants: Number.isFinite(body.videoVariants) ? body.videoVariants : null,
+      audioTracks: Number.isFinite(body.audioTracks) ? body.audioTracks : null,
+      hdr: body.hdr || null,
+      drm: body.drm || null,
+      summaryJson: JSON.stringify(maskDeep(body.summary)),
+    });
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-    res.end(JSON.stringify({ ok: true, id: Number(info.lastInsertRowid) }));
+    res.end(JSON.stringify({ ok: true, id }));
   } catch (e) {
     res.writeHead(500, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'Falha ao salvar no histórico: ' + e.message }));
   }
 }
 
-function handleHistoryList(res, search) {
-  if (!historyDb) {
-    res.writeHead(501, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ error: 'Histórico indisponível: ' + (historyError || 'node:sqlite não carregado') }));
-  }
+async function handleHistoryList(res, search) {
   const m = (search || '').match(/[?&]limit=(\d+)/);
   const limit = Math.min(100, Math.max(1, m ? Number(m[1]) : 20));
+  try { await historyStore.ready(); } catch (e) { return historyUnavailable(res, e); }
   try {
-    const rows = historyDb.prepare(`
-      SELECT id, ts, url, protocol, live, video_variants, audio_tracks, hdr, drm, summary_json
-      FROM inspections ORDER BY ts DESC LIMIT ?
-    `).all(limit);
-    const items = rows.map((r) => ({
-      id: r.id, ts: r.ts, url: r.url, protocol: r.protocol,
-      live: !!r.live, videoVariants: r.video_variants, audioTracks: r.audio_tracks,
-      hdr: r.hdr, drm: r.drm, summary: JSON.parse(r.summary_json),
-    }));
+    const items = await historyStore.list(limit);
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     res.end(JSON.stringify({ items }));
   } catch (e) {
     res.writeHead(500, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'Falha ao ler histórico: ' + e.message }));
   }
+}
+
+/** Estado do serviço — sempre 200; serve para conferir o binding do banco após o deploy. */
+function handleHealth(res) {
+  res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+  res.end(JSON.stringify({ ok: true, history: historyStore.describe() }));
 }
 
 function handleStatic(req, res, urlPath) {
@@ -723,12 +683,19 @@ function routeRequest(req, res) {
     return handleResolve(res, search);
   }
   if (urlPath === '/api/history') return handleHistoryList(res, search);
+  if (urlPath === '/api/health') return handleHealth(res);
   return handleStatic(req, res, urlPath);
 }
 
 server.listen(PORT, HOST, () => {
   console.log(`Stream Inspector rodando em http://localhost:${PORT} (host: ${HOST})`);
   console.log(`Proxy de CORS ativo em /p/<scheme>/<host>/<caminho>`);
+  // só o backend e o NOME da variável que o configurou — nunca a URL do banco
+  const h = historyStore.describe();
+  console.log(h.backend === 'mysql'
+    ? `Histórico: MySQL (configurado por ${h.configuredBy})`
+    : 'Histórico: SQLite local (sem banco configurado — não persiste em container efêmero)');
+  historyStore.ready().catch((e) => console.warn('Histórico indisponível:', e.message));
 });
 
 // Uma requisição malformada não pode tirar o servidor do ar — loga e segue.

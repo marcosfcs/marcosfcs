@@ -2405,7 +2405,14 @@ function saveHistoryEntry(url, model, adBreaks) {
 async function loadHistory() {
   try {
     const res = await fetch('/api/history?limit=50'); // painel tem scroll (.history-list), então mostra mais que os últimos 10
-    if (!res.ok) return;
+    if (!res.ok) {
+      // banco configurado mas fora do ar (501): diz o motivo em vez de
+      // fingir que não há testes salvos
+      const body = await res.json().catch(() => ({}));
+      const msg = body.error || `Histórico indisponível (HTTP ${res.status}).`;
+      for (const id of ['#history-note', '#home-history-note']) { $(id).textContent = msg; $(id).hidden = false; }
+      return;
+    }
     const { items } = await res.json();
     renderHistoryList(items || []);
   } catch { /* histórico é best-effort */ }
@@ -2417,6 +2424,7 @@ function renderHistoryList(items) {
     ? `${items.length} teste${items.length > 1 ? 's' : ''} recente${items.length > 1 ? 's' : ''}. Clique para reabrir (somente leitura, sem player).`
     : 'Nenhum teste salvo ainda.';
   $('#history-note').textContent = note;
+  $('#home-history-note').textContent = 'Nenhum teste salvo ainda. As inspeções ficam registradas aqui.';
   $('#home-history-note').hidden = items.length > 0;
   // mesma lista em dois lugares: painel Histórico (sessão) e tela inicial
   for (const list of [$('#history-list'), $('#home-history')]) {
@@ -2453,7 +2461,12 @@ function restoreHistoryEntry(item) {
   // quem acabou de ser (re)preenchida logo abaixo.
   UI.showSession({ url: model.overview['URL'] || item.url, readonly: true });
   $('#url').value = item.url || '';
-  setStatus('Sessão histórica de ' + new Date(item.ts).toLocaleString('pt-BR') + ' — somente leitura, sem player. Clique em Inspecionar para medir de novo.', 'info');
+  // tokens de acesso são mascarados no servidor antes de gravar ("***"),
+  // então uma URL assim não serve para inspecionar de novo como está
+  const masked = /\*\*\*/.test(item.url || '');
+  setStatus('Sessão histórica de ' + new Date(item.ts).toLocaleString('pt-BR') + ' — somente leitura, sem player. ' +
+    (masked ? 'Os tokens da URL foram mascarados ao salvar: cole a URL completa para medir de novo.'
+      : 'Clique em Inspecionar para medir de novo.'), 'info');
   renderBadges(model);
   renderKV($('#overview'), model.overview);
   $('#raw-manifest').textContent = '(manifest bruto não é armazenado no histórico — apenas o resumo estático)';

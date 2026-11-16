@@ -153,10 +153,50 @@ O `server.js`/backend Go são ferramentas locais single-user, endurecidas com is
 
 ### Onde ficam os dados (histórico)
 
-Por padrão em `~/.stream-inspector/` (fora da pasta do repositório) — override via
-`STREAM_INSPECTOR_DATA_DIR=/algum/caminho node server.js`. Fica fora do clone de
-propósito: uma pasta *dentro* do repositório seria apagada a cada `git clone`/
-checkout novo.
+O histórico de testes ("Testes recentes") tem dois modos, escolhidos pelo ambiente
+(`lib/history-store.js`):
+
+| Modo | Quando | Persistência |
+|---|---|---|
+| **MySQL** | há um banco configurado por variável de ambiente | sobrevive a deploys/restarts e é compartilhado entre unidades |
+| **SQLite local** | nenhuma variável de banco definida | arquivo em `~/.stream-inspector/` (override: `STREAM_INSPECTOR_DATA_DIR`), fora do repositório |
+
+Em plataformas com disco efêmero (Tsuru, Kubernetes) o SQLite local **não
+persiste**: cada deploy começa vazio. Use o MySQL.
+
+A conexão MySQL é lida, nesta ordem, de: `HISTORY_DATABASE_URL`,
+`DBAAS_MYSQL_ENDPOINT`, `DATABASE_URL`/`MYSQL_URL` (formato
+`mysql://usuario:senha@host:porta/banco`), ou das variáveis discretas
+`MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE_NAME`.
+A tabela `inspections` é criada sozinha na subida. Se o banco estiver configurado
+mas inacessível, o histórico responde 501 com o motivo; ele **não** cai para o
+SQLite local, que mascararia o problema.
+
+**Binding no Tsuru (DBaaS):**
+
+```bash
+tsuru service list                                  # nome do serviço DBaaS e planos
+tsuru service instance add <servico> <instancia> <plano-mysql> -t <time>
+tsuru service instance bind <servico> <instancia> -a <app>
+tsuru env get -a <app> | cut -d= -f1                # confere os nomes injetados
+curl https://<app>/api/health                       # history.backend = "mysql", ok = true
+```
+
+`GET /api/health` responde sempre 200 e informa o backend do histórico, se está
+operante e qual variável o configurou (nunca o valor).
+
+**Privacidade:** o histórico é compartilhado por todos que abrem o app, então
+credenciais são mascaradas no servidor antes de gravar: valores de parâmetros como
+`token`, `signature`, `hdnts`, `Policy`, `Key-Pair-Id`, `X-Amz-*`, valores longos e
+opacos, tokens Akamai no caminho e `usuario:senha@` viram `***`. Uma sessão
+reaberta do histórico mostra os metadados; para medir de novo é preciso colar a
+URL completa.
+
+O backend em **Go** não tem o modo MySQL nem o mascaramento: continua só com
+SQLite local.
+
+Dependência: o modo MySQL usa o pacote `mysql2` (`npm install`). Sem banco
+configurado ele nem é carregado, e `node server.js` segue funcionando sem instalar nada.
 
 ## YouTube (opcional)
 
@@ -230,19 +270,20 @@ ffmpeg -i distorcido.mp4 -i referencia.mp4 \
 
 Duas implementações do mesmo backend convivem no repositório — **Node** (`server.js`,
 raiz) e **Go** (`cmd/server/` + `internal/`) — servindo o mesmo `public/`, com as
-mesmas rotas e o mesmo comportamento observável. Não é preciso escolher uma: rode
+mesmas rotas e o mesmo comportamento observável (exceto o histórico em MySQL, só no Node). Não é preciso escolher uma: rode
 qualquer uma das duas, ou as duas ao mesmo tempo em portas diferentes.
 
 | Caminho | O que é |
 |---|---|
-| `server.js` | Backend em **Node puro** (zero dependências) — servidor estático + proxy de CORS (`/p/…`), resolução de YouTube via `yt-dlp`, histórico via `node:sqlite`. Ponto de entrada de `npm start`/`node server.js`. |
+| `server.js` | Backend em **Node** — servidor estático + proxy de CORS (`/p/…`), resolução de YouTube via `yt-dlp`, histórico (MySQL ou SQLite). Sem dependências obrigatórias: `mysql2` só é usado quando há banco configurado. Ponto de entrada de `npm start`/`node server.js`. |
+| `lib/history-store.js` | Armazenamento do histórico (MySQL via binding ou SQLite local) e mascaramento de credenciais das URLs. |
 | `public/` | Todo o frontend (HTML/CSS/JS vanilla, sem framework nem build step) — servido tanto pelo `server.js` quanto embedado no binário Go. Ver detalhamento completo abaixo. |
 | `cmd/server/` | Ponto de entrada do backend em **Go** (`main.go`) — monta as rotas HTTP e liga os pacotes de `internal/`; equivalente a `server.js`, mesmas rotas e variáveis de ambiente. |
 | `internal/` | Pacotes Go que implementam o backend, um por responsabilidade: `proxy/` (proxy de CORS + reescrita de manifest), `security/` (bloqueio de SSRF, guard de mesma-origem), `resolve/` (resolução de YouTube via `yt-dlp`), `history/` (persistência SQLite), `static/` (serve o `public/` embedado). Cada um é o equivalente direto de uma seção do `server.js`. |
 | `assets.go` | `//go:embed` que empacota `public/` inteiro dentro do binário Go — é por isso que `go build` gera um único executável sem precisar copiar a pasta `public/` junto. |
 | `scripts/` | Testes headless (Node puro, sem navegador) da matemática mais sensível a erro de offset/bit: `color-math-test.js` (normalização PQ/HLG, conversão de primárias) e `encoding-gop-test.js` (parsing de boxes fMP4/`trun` e pacotes MPEG-TS/PES para keyframe e GOP). |
 | `go.mod` / `go.sum` | Dependências do backend Go (hoje só `modernc.org/sqlite`, driver SQLite 100% Go sem cgo, + suas dependências transitivas). |
-| `package.json` / `package-lock.json` | Metadados do projeto Node — o core do `server.js` não tem dependências de runtime; nada aqui é necessário para `node server.js` funcionar. |
+| `package.json` / `package-lock.json` | Metadados do projeto Node. Única dependência: `mysql2`, necessária só para o histórico em MySQL; `node server.js` funciona sem `npm install` no modo local. |
 | `.gitignore` | Exclui `node_modules/`, logs e o binário compilado do Go (`stream-inspector-server`) do controle de versão. |
 | `README.md` | Este arquivo. |
 
@@ -275,6 +316,7 @@ public/
   samples/                manifests de exemplo (HLS com HDR/legendas/Atmos; MPD com DRM)
 scripts/color-math-test.js    teste headless da matemática de cor HDR (sem navegador)
 scripts/encoding-gop-test.js  teste headless do parsing de keyframe/GOP (fMP4 trun + TS/PES, sem navegador)
+scripts/history-mask-test.js  teste headless do mascaramento de credenciais e da resolução do banco do histórico
 cmd/server/, internal/    porta do backend para Go (mesmo comportamento observável do server.js)
 ```
 
