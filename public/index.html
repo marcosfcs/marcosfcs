@@ -141,6 +141,7 @@
       </section>
       <section class="home-card" aria-labelledby="home-hist-title">
         <h2 id="home-hist-title">Testes recentes</h2>
+        <div class="history-toolbar" data-history-toolbar hidden></div>
         <p id="home-history-note" class="empty-note">Nenhum teste salvo ainda. As inspeções ficam registradas aqui.</p>
         <ul id="home-history" class="history-list"></ul>
       </section>
@@ -153,6 +154,7 @@
 
     <div class="session-bar">
       <span id="badges" class="badges"></span>
+      <button type="button" id="btn-label" class="btn-label" hidden></button>
       <span id="session-url" class="session-url" title=""></span>
       <button type="button" id="btn-copy-url" class="btn-ghost" title="Copiar a URL inspecionada">Copiar URL</button>
       <button type="button" id="btn-dock-toggle" class="btn-ghost" aria-pressed="false"
@@ -583,12 +585,39 @@
 
       <section class="panel" data-panel="historico" hidden>
         <h2>Histórico de testes</h2>
+        <div class="history-toolbar" data-history-toolbar hidden></div>
         <p id="history-note" class="note">Nenhum teste salvo ainda.</p>
         <ul id="history-list" class="history-list"></ul>
       </section>
 
     </main>
   </div>
+
+  <!-- identificar um teste: plataforma, nome da mídia/canal e ao vivo × VOD -->
+  <dialog id="label-dialog" class="label-dialog" aria-labelledby="label-title">
+    <form id="label-form" autocomplete="off">
+      <h2 id="label-title">Identificar este teste</h2>
+      <p id="label-url" class="lbl-url"></p>
+      <label class="label-field"><span>Plataforma</span>
+        <input type="text" id="label-platform" list="label-platforms" maxlength="80" placeholder="ex.: Globoplay, ge, Cartola" />
+      </label>
+      <datalist id="label-platforms"></datalist>
+      <label class="label-field"><span>Nome da mídia / canal</span>
+        <input type="text" id="label-name" maxlength="160" placeholder="ex.: Globo SP, Novela das 9" />
+      </label>
+      <div class="label-field"><span>Tipo</span>
+        <div class="hist-seg" role="radiogroup" aria-label="Tipo">
+          <label><input type="radio" name="label-live" value="live" /><span>Ao vivo</span></label>
+          <label><input type="radio" name="label-live" value="vod" /><span>VOD</span></label>
+        </div>
+      </div>
+      <p id="label-error" class="note warn" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" id="label-cancel" class="btn-secondary">Cancelar</button>
+        <button type="submit" id="label-save" class="btn-primary">Salvar</button>
+      </div>
+    </form>
+  </dialog>
 
   <!-- hls.js/Shaka NÃO são carregados aqui de forma estática: existem 2
        versões de cada (ver ENGINE_BUNDLES em app.js) e só uma pode ocupar

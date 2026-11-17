@@ -105,7 +105,6 @@ body:not([data-view="home"]) .home { display: none; }
   font: var(--fs-xs) var(--font-mono); color: var(--text-muted);
 }
 .session-bar .btn-ghost { flex: none; padding: 4px 10px; font-size: var(--fs-xs); }
-
 /* ---------- navegação ---------- */
 .side-nav {
   grid-area: nav; position: sticky; top: calc(var(--topbar-h) + 14px);

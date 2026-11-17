@@ -33,6 +33,8 @@ const state = {
   lastDropRate: null,  // taxa de descarte do tick corrente (p/ alerta highDropRate)
   drmBlocked: false,
   lastPlay: null,      // { type, url, model, isLive } — p/ trocar de motor sem re-inspecionar
+  currentHistoryId: null, // id da linha do histórico da sessão aberta (p/ "Nomear este teste")
+  currentLabel: null,     // { name, platform, live } dessa linha
 
   // telemetria avançada
   audioMeter: null,
@@ -2253,6 +2255,7 @@ async function inspect(url) {
   $('#event-log').innerHTML = '';
   stopPlayback();
   state.lastPlay = null;
+  state.currentHistoryId = null; state.currentLabel = null; renderSessionLabel();
   for (const k of Object.keys(state.charts)) destroyChart(k);
   _cmcdSessionId = null;
   state._cmcdKv = null; state._cmsdKv = null; state._cmcdShown = false;
@@ -2399,72 +2402,289 @@ function saveHistoryEntry(url, model, adBreaks) {
   };
   fetch('/api/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     .then((r) => r.json())
-    .then((r) => { if (r && r.ok) loadHistory(); })
+    .then((r) => {
+      if (!r || !r.ok) return;
+      // id da linha (para "Nomear este teste") e rótulo herdado de um teste anterior da mesma URL
+      state.currentHistoryId = r.id;
+      state.currentLabel = { name: r.name || null, platform: r.platform || null, live: body.live };
+      renderSessionLabel();
+      loadHistory();
+    })
     .catch(() => { /* histórico é best-effort — não interrompe a inspeção */ });
 }
 
+/* ================================================================ *
+ * Histórico: lista, pesquisa e rótulos (plataforma / nome / ao vivo × VOD)
+ *
+ * A pesquisa e os filtros rodam no servidor (GET /api/history?q&live&platform)
+ * sobre todo o histórico, não só sobre os itens listados. A lista vem sem o
+ * resumo; ele é buscado em GET /api/history/:id ao reabrir um teste.
+ * ================================================================ */
+
+const historyState = {
+  items: [], total: 0, all: 0, platforms: [],
+  query: { q: '', live: '', platform: '' },
+  searchable: false,   // servidor novo (Node) responde total/all/platforms; o Go só devolve items
+  unavailable: null,   // motivo, se o histórico está fora do ar
+  seq: 0, timer: null,
+};
+
+function historyFiltersActive() {
+  const q = historyState.query;
+  return !!(q.q.trim() || q.live || q.platform);
+}
+
+function historyQueryString() {
+  const q = historyState.query;
+  const sp = new URLSearchParams({ limit: '100' });
+  if (q.q.trim()) sp.set('q', q.q.trim());
+  if (q.live) sp.set('live', q.live);
+  if (q.platform) sp.set('platform', q.platform);
+  return sp.toString();
+}
+
 /** Só popula a lista — o painel de Histórico é um item de menu como
- * qualquer outro (seção 10, depois de QoE): fica quieto/oculto até o
- * usuário clicar nele, nunca abre nem toma espaço sozinho ao carregar a
- * página. */
+ * qualquer outro: fica quieto até o usuário abri-lo. */
 async function loadHistory() {
+  const seq = ++historyState.seq;
   try {
-    const res = await fetch('/api/history?limit=50'); // painel tem scroll (.history-list), então mostra mais que os últimos 10
+    const res = await fetch('/api/history?' + historyQueryString());
+    if (seq !== historyState.seq) return; // chegou uma pesquisa mais nova: descarta esta
     if (!res.ok) {
       // banco configurado mas fora do ar (501): diz o motivo em vez de
       // fingir que não há testes salvos
       const body = await res.json().catch(() => ({}));
-      const msg = body.error || `Histórico indisponível (HTTP ${res.status}).`;
-      for (const id of ['#history-note', '#home-history-note']) { $(id).textContent = msg; $(id).hidden = false; }
+      Object.assign(historyState, { items: [], total: 0, all: 0, platforms: [], searchable: false,
+        unavailable: body.error || `Histórico indisponível (HTTP ${res.status}).` });
+      renderHistoryList();
       return;
     }
-    const { items } = await res.json();
-    renderHistoryList(items || []);
+    const data = await res.json();
+    const items = data.items || [];
+    Object.assign(historyState, {
+      items, unavailable: null,
+      searchable: data.all != null,
+      total: data.total != null ? data.total : items.length,
+      all: data.all != null ? data.all : items.length,
+      platforms: data.platforms || [],
+    });
+    renderHistoryList();
   } catch { /* histórico é best-effort */ }
 }
 
-function renderHistoryList(items) {
-  UI.setHistoryCount(items.length);
-  const note = items.length
-    ? `${items.length} teste${items.length > 1 ? 's' : ''} recente${items.length > 1 ? 's' : ''}. Clique para reabrir (somente leitura, sem player).`
-    : 'Nenhum teste salvo ainda.';
-  $('#history-note').textContent = note;
-  $('#home-history-note').textContent = 'Nenhum teste salvo ainda. As inspeções ficam registradas aqui.';
-  $('#home-history-note').hidden = items.length > 0;
+function scheduleHistoryLoad() {
+  clearTimeout(historyState.timer);
+  historyState.timer = setTimeout(loadHistory, 250);
+}
+
+/** Monta uma barra de pesquisa/filtros. Existem duas (tela inicial e painel), sincronizadas. */
+function buildHistoryToolbar(host) {
+  host.innerHTML = '';
+  const search = el('input', 'hist-search');
+  search.type = 'search';
+  search.placeholder = 'Pesquisar testes';
+  search.title = 'Pesquisa por nome, plataforma ou URL';
+  search.autocomplete = 'off';
+  search.spellcheck = false;
+  search.setAttribute('aria-label', 'Pesquisar nos testes');
+  search.addEventListener('input', () => {
+    historyState.query.q = search.value;
+    syncHistoryToolbars(search);
+    scheduleHistoryLoad();
+  });
+  search.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && search.value) { e.preventDefault(); historyState.query.q = ''; syncHistoryToolbars(); loadHistory(); }
+  });
+
+  const seg = el('div', 'hist-seg');
+  seg.setAttribute('role', 'group');
+  seg.setAttribute('aria-label', 'Tipo');
+  for (const [value, label] of [['', 'Todos'], ['live', 'Ao vivo'], ['vod', 'VOD']]) {
+    const b = el('button', null, label);
+    b.type = 'button';
+    b.dataset.live = value;
+    b.addEventListener('click', () => { historyState.query.live = value; syncHistoryToolbars(); loadHistory(); });
+    seg.appendChild(b);
+  }
+
+  const plat = el('select', 'track-select hist-platform');
+  plat.setAttribute('aria-label', 'Plataforma');
+  plat.addEventListener('change', () => { historyState.query.platform = plat.value; syncHistoryToolbars(); loadHistory(); });
+
+  const clear = el('button', 'btn-ghost hist-clear', 'Limpar');
+  clear.type = 'button';
+  clear.addEventListener('click', () => { historyState.query = { q: '', live: '', platform: '' }; syncHistoryToolbars(); loadHistory(); });
+
+  host.append(search, seg, plat, clear);
+}
+
+/** Reflete o estado (consulta + plataformas conhecidas) em todas as barras. */
+function syncHistoryToolbars(skipEl) {
+  const q = historyState.query;
+  const names = historyState.platforms.map((p) => p.name);
+  for (const host of document.querySelectorAll('[data-history-toolbar]')) {
+    // sem nenhum teste salvo (ou num servidor sem pesquisa) a barra não tem o que fazer
+    host.hidden = !(historyState.searchable && historyState.all > 0);
+    const search = host.querySelector('.hist-search');
+    if (search !== skipEl && search.value !== q.q) search.value = q.q;
+    for (const b of host.querySelectorAll('.hist-seg button')) b.setAttribute('aria-pressed', String(b.dataset.live === q.live));
+    const plat = host.querySelector('.hist-platform');
+    plat.innerHTML = '';
+    plat.appendChild(new Option('Todas as plataformas', ''));
+    for (const p of historyState.platforms) plat.appendChild(new Option(`${p.name} (${p.count})`, p.name));
+    // a plataforma filtrada pode ter deixado de existir (renomeada): mantém a opção ativa visível
+    if (q.platform && !names.includes(q.platform)) plat.appendChild(new Option(q.platform, q.platform));
+    plat.value = q.platform;
+    plat.hidden = !names.length && !q.platform;
+    host.querySelector('.hist-clear').hidden = !historyFiltersActive();
+  }
+}
+
+function historyNote() {
+  const h = historyState;
+  if (h.unavailable) return h.unavailable;
+  if (!h.all) return 'Nenhum teste salvo ainda. As inspeções ficam registradas aqui.';
+  if (!h.total) return 'Nenhum teste encontrado para essa pesquisa.';
+  const more = h.items.length < h.total;
+  if (historyFiltersActive()) {
+    return `${h.total} de ${h.all} testes.` + (more ? ` Mostrando os ${h.items.length} mais recentes.` : '');
+  }
+  return `${h.all} teste${h.all > 1 ? 's' : ''}. Clique para reabrir (somente leitura, sem player).` +
+    (more ? ` Mostrando os ${h.items.length} mais recentes: use a pesquisa para achar os demais.` : '');
+}
+
+function renderHistoryList() {
+  UI.setHistoryCount(historyState.all);
+  syncHistoryToolbars();
+  const note = historyNote();
+  for (const id of ['#history-note', '#home-history-note']) { $(id).textContent = note; $(id).hidden = !note; }
   // mesma lista em dois lugares: painel Histórico (sessão) e tela inicial
   for (const list of [$('#history-list'), $('#home-history')]) {
     list.innerHTML = '';
-    for (const item of items) {
-      const li = el('li');
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'history-item';
-      const time = el('span', 'hi-time', new Date(item.ts).toLocaleString('pt-BR'));
-      const urlEl = el('span', 'hi-url', item.url);
-      urlEl.title = item.url;
-      const tags = el('span', 'hi-tags');
-      tags.appendChild(badge(item.protocol || '—', 'info'));
-      tags.appendChild(badge(item.live ? 'AO VIVO' : 'VOD', item.live ? 'live' : 'ok'));
-      if (item.hdr && item.hdr !== 'SDR') tags.appendChild(badge('HDR: ' + item.hdr, 'hdr'));
-      if (item.drm && item.drm !== 'Nenhuma') tags.appendChild(badge('DRM', 'drm'));
-      btn.append(urlEl, time, tags);
-      btn.addEventListener('click', () => restoreHistoryEntry(item));
-      li.appendChild(btn);
-      list.appendChild(li);
-    }
+    for (const item of historyState.items) list.appendChild(historyRow(item));
   }
+}
+
+function historyRow(item) {
+  const li = el('li', 'history-row');
+  const open = el('button', 'history-item');
+  open.type = 'button';
+  const main = el('span', 'hi-main');
+  const title = el('span', item.name ? 'hi-title' : 'hi-title hi-title-url', item.name || item.url);
+  title.title = item.url;
+  const when = new Date(item.ts).toLocaleString('pt-BR');
+  const tags = el('span', 'hi-tags');
+  tags.appendChild(badge(item.protocol || '—', 'info'));
+  tags.appendChild(badge(item.live ? 'AO VIVO' : 'VOD', item.live ? 'live' : 'ok'));
+  if (item.hdr && item.hdr !== 'SDR') tags.appendChild(badge('HDR: ' + item.hdr, 'hdr'));
+  if (item.drm && item.drm !== 'Nenhuma') tags.appendChild(badge('DRM', 'drm'));
+  // título / plataforma · data + selos / URL (quando há nome)
+  const sub = el('span', 'hi-sub');
+  sub.append(el('span', 'hi-meta', item.platform ? `${item.platform} · ${when}` : when), tags);
+  main.append(title, sub);
+  if (item.name) { const u = el('span', 'hi-url', item.url); u.title = item.url; main.appendChild(u); }
+  open.appendChild(main);
+  open.addEventListener('click', () => restoreHistoryEntry(item));
+
+  const edit = el('button', 'hi-edit', item.name || item.platform ? 'Editar' : 'Nomear');
+  edit.type = 'button';
+  edit.setAttribute('aria-label', `${edit.textContent} o teste ${item.name || item.url}`);
+  edit.addEventListener('click', () => openLabelDialog(item));
+  li.append(open, edit);
+  return li;
+}
+
+/* ---------- rótulo: diálogo e botão da sessão ---------- */
+
+/** item: { id, url, name, platform, live }. */
+function openLabelDialog(item) {
+  const dlg = $('#label-dialog');
+  if (!dlg.showModal) return; // navegador sem <dialog>
+  dlg.dataset.id = String(item.id);
+  $('#label-url').textContent = item.url || '';
+  $('#label-url').title = item.url || '';
+  $('#label-platform').value = item.platform || '';
+  $('#label-name').value = item.name || '';
+  for (const r of dlg.querySelectorAll('input[name="label-live"]')) r.checked = r.value === (item.live ? 'live' : 'vod');
+  const dl = $('#label-platforms');
+  dl.innerHTML = '';
+  for (const p of historyState.platforms) { const o = document.createElement('option'); o.value = p.name; dl.appendChild(o); }
+  $('#label-error').hidden = true;
+  dlg.showModal();
+  ($('#label-platform').value ? $('#label-name') : $('#label-platform')).focus();
+}
+
+async function submitLabelDialog(e) {
+  e.preventDefault();
+  const dlg = $('#label-dialog');
+  const id = Number(dlg.dataset.id);
+  const save = $('#label-save');
+  const err = $('#label-error');
+  const picked = dlg.querySelector('input[name="label-live"]:checked');
+  const body = { name: $('#label-name').value, platform: $('#label-platform').value };
+  if (picked) body.live = picked.value === 'live';
+  save.disabled = true;
+  err.hidden = true;
+  try {
+    const res = await fetch('/api/history/' + id, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      // o backend Go não tem essa rota: 404/405 sem corpo JSON de erro
+      if (res.status === 405 || (res.status === 404 && !data.error)) throw new Error('Edição indisponível neste servidor (só o backend Node salva nome e plataforma).');
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    if (id === state.currentHistoryId) {
+      state.currentLabel = { name: data.item.name, platform: data.item.platform, live: data.item.live };
+      renderSessionLabel();
+    }
+    dlg.close();
+    loadHistory(); // reordena/atualiza a lista e as sugestões de plataforma
+  } catch (e2) {
+    err.textContent = 'Não foi possível salvar: ' + e2.message;
+    err.hidden = false;
+  } finally {
+    save.disabled = false;
+  }
+}
+
+/** Botão na barra da sessão: "Nomear este teste" ou "Plataforma · Nome ✎". */
+function renderSessionLabel() {
+  const btn = $('#btn-label');
+  if (!state.currentHistoryId) { btn.hidden = true; return; }
+  btn.hidden = false;
+  const l = state.currentLabel || {};
+  const text = [l.platform, l.name].filter(Boolean).join(' · ');
+  btn.textContent = text ? text + ' ✎' : 'Nomear este teste';
+  btn.classList.toggle('is-set', !!text);
+  btn.title = text ? 'Editar plataforma, nome e tipo deste teste' : 'Dar plataforma e nome a este teste para achá-lo depois';
 }
 
 /** Restaura só as seções estáticas de um teste antigo — sem player/telemetria
  * (o stream pode nem existir mais, especialmente ao vivo). */
-function restoreHistoryEntry(item) {
+async function restoreHistoryEntry(item) {
+  // a lista não traz o resumo; servidores antigos (Go) ainda o trazem inline
+  if (!item.summary) {
+    try {
+      const res = await fetch('/api/history/' + item.id);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      item = { ...item, ...(await res.json()).item };
+    } catch (e) {
+      setStatus('Não foi possível abrir este teste do histórico: ' + e.message, 'error');
+      return;
+    }
+  }
   stopPlayback();
   state.lastPlay = null;
   for (const k of Object.keys(state.charts)) destroyChart(k);
+  state.currentHistoryId = item.id;
+  state.currentLabel = { name: item.name || null, platform: item.platform || null, live: !!item.live };
   const model = item.summary;
   // sessão somente leitura: esconde o monitor e abre na Visão geral, que é
   // quem acabou de ser (re)preenchida logo abaixo.
   UI.showSession({ url: model.overview['URL'] || item.url, readonly: true });
+  renderSessionLabel();
   $('#url').value = item.url || '';
   // tokens de acesso são mascarados no servidor antes de gravar ("***"),
   // então uma URL assim não serve para inspecionar de novo como está
@@ -2510,8 +2730,17 @@ async function loadCapabilities() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  for (const host of document.querySelectorAll('[data-history-toolbar]')) buildHistoryToolbar(host);
   loadHistory();
   loadCapabilities();
+
+  // rótulo do teste: diálogo (lista e sessão) e botão da barra da sessão
+  $('#label-form').addEventListener('submit', submitLabelDialog);
+  $('#label-cancel').addEventListener('click', () => $('#label-dialog').close());
+  $('#label-dialog').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });
+  $('#btn-label').addEventListener('click', () => openLabelDialog({
+    id: state.currentHistoryId, url: $('#session-url').title, ...state.currentLabel,
+  }));
 
   $('#form').addEventListener('submit', (e) => {
     e.preventDefault();

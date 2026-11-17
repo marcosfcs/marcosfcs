@@ -544,7 +544,7 @@ async function handleHistorySave(req, res) {
   try {
     // O histórico é compartilhado: tokens/assinaturas das URLs são mascarados
     // ANTES de gravar (na URL principal e em qualquer URL dentro do resumo).
-    const id = await historyStore.save({
+    const saved = await historyStore.save({
       ts: Date.now(),
       url: maskUrl(body.url).slice(0, 2000),
       protocol: body.protocol || null,
@@ -556,24 +556,86 @@ async function handleHistorySave(req, res) {
       summaryJson: JSON.stringify(maskDeep(body.summary)),
     });
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-    res.end(JSON.stringify({ ok: true, id }));
+    // devolve também o rótulo herdado de um teste anterior da mesma URL
+    res.end(JSON.stringify({ ok: true, id: saved.id, name: saved.name, platform: saved.platform }));
   } catch (e) {
     res.writeHead(500, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'Falha ao salvar no histórico: ' + e.message }));
   }
 }
 
+/**
+ * GET /api/history?limit&q&live&platform → { items, total, all, platforms }.
+ * Os itens vêm SEM o summary (leve, pesquisável a cada tecla); o resumo de um
+ * teste sai de GET /api/history/:id.
+ */
 async function handleHistoryList(res, search) {
-  const m = (search || '').match(/[?&]limit=(\d+)/);
-  const limit = Math.min(100, Math.max(1, m ? Number(m[1]) : 20));
+  const sp = new URLSearchParams(search || '');
+  const live = sp.get('live');
+  const opts = {
+    limit: Number(sp.get('limit')) || 20,
+    q: (sp.get('q') || '').slice(0, 200),
+    live: live === 'live' || live === 'vod' ? live : null,
+    platform: (sp.get('platform') || '').slice(0, 80),
+  };
   try { await historyStore.ready(); } catch (e) { return historyUnavailable(res, e); }
   try {
-    const items = await historyStore.list(limit);
+    const out = await historyStore.list(opts);
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-    res.end(JSON.stringify({ items }));
+    res.end(JSON.stringify(out));
   } catch (e) {
     res.writeHead(500, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'Falha ao ler histórico: ' + e.message }));
+  }
+}
+
+function jsonError(res, status, message) {
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ error: message }));
+}
+
+/** GET /api/history/:id → o teste completo (com o summary). */
+async function handleHistoryGet(res, id) {
+  try { await historyStore.ready(); } catch (e) { return historyUnavailable(res, e); }
+  try {
+    const item = await historyStore.get(id);
+    if (!item) return jsonError(res, 404, 'Teste não encontrado no histórico.');
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ item }));
+  } catch (e) {
+    jsonError(res, 500, 'Falha ao ler histórico: ' + e.message);
+  }
+}
+
+/**
+ * POST /api/history/:id — rotula um teste. Corpo: { name?, platform?, live? }
+ * (name/platform: texto ou null para limpar; live: booleano). É POST e não
+ * PATCH para não depender de proxies que barram métodos menos comuns.
+ */
+async function handleHistoryUpdate(req, res, id) {
+  let body;
+  try { body = await readJsonBody(req, 16 * 1024); } catch (e) { return jsonError(res, 400, e.message); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonError(res, 400, 'Corpo inválido.');
+  const patch = {};
+  for (const k of ['name', 'platform']) {
+    if (!(k in body)) continue;
+    if (body[k] !== null && typeof body[k] !== 'string') return jsonError(res, 400, `"${k}" deve ser texto ou null.`);
+    if (typeof body[k] === 'string' && body[k].length > 1000) return jsonError(res, 400, `"${k}" é longo demais.`);
+    patch[k] = body[k];
+  }
+  if ('live' in body) {
+    if (typeof body.live !== 'boolean') return jsonError(res, 400, '"live" deve ser true ou false.');
+    patch.live = body.live;
+  }
+  if (!Object.keys(patch).length) return jsonError(res, 400, 'Informe ao menos um de: name, platform, live.');
+  try { await historyStore.ready(); } catch (e) { return historyUnavailable(res, e); }
+  try {
+    const item = await historyStore.update(id, patch);
+    if (!item) return jsonError(res, 404, 'Teste não encontrado no histórico.');
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ ok: true, item }));
+  } catch (e) {
+    jsonError(res, 500, 'Falha ao atualizar o histórico: ' + e.message);
   }
 }
 
@@ -680,6 +742,11 @@ function routeRequest(req, res) {
     if (!isSameOrigin(req)) return denyCrossOrigin(res);
     return handleHistorySave(req, res);
   }
+  const histId = /^\/api\/history\/(\d{1,15})$/.exec(urlPath);
+  if (req.method === 'POST' && histId) {
+    if (!isSameOrigin(req)) return denyCrossOrigin(res);
+    return handleHistoryUpdate(req, res, Number(histId[1]));
+  }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405);
     return res.end('Método não permitido');
@@ -697,6 +764,7 @@ function routeRequest(req, res) {
     return handleResolve(res, search);
   }
   if (urlPath === '/api/history') return handleHistoryList(res, search);
+  if (histId) return handleHistoryGet(res, Number(histId[1]));
   if (urlPath === '/api/health') return handleHealth(res);
   return handleStatic(req, res, urlPath);
 }

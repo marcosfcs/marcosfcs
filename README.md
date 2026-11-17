@@ -205,8 +205,21 @@ opacos, tokens Akamai no caminho e `usuario:senha@` viram `***`. Uma sessão
 reaberta do histórico mostra os metadados; para medir de novo é preciso colar a
 URL completa.
 
-O backend em **Go** não tem o modo MySQL nem o mascaramento: continua só com
-SQLite local.
+**Nomear e pesquisar:** cada teste pode receber **plataforma**, **nome da mídia/canal** e
+**tipo** (ao vivo × VOD, que começa com o valor detectado no manifest), pelo botão
+*Nomear*/*Editar* da lista ou por *Nomear este teste* na barra da sessão. Inspecionar de
+novo uma URL já nomeada reaproveita o rótulo. A pesquisa (nome, plataforma, URL e
+protocolo, sem diferenciar maiúsculas nem acentos) e os filtros ao vivo/VOD/plataforma
+rodam no servidor sobre todo o histórico: `GET /api/history?q=&live=&platform=`. O rótulo
+é gravado por `POST /api/history/:id` e o resumo de um teste sai de `GET /api/history/:id`
+(a lista vem sem o resumo, para a pesquisa ser leve). O histórico é compartilhado:
+qualquer pessoa com acesso ao app edita qualquer rótulo (vale a última gravação). No teto
+de 500 testes, os mais antigos **sem rótulo** saem primeiro. As colunas `name` e
+`platform` são criadas sozinhas na subida (o usuário do banco precisa poder fazer
+`ALTER TABLE`); linhas antigas ficam sem rótulo até serem editadas.
+
+O backend em **Go** não tem o modo MySQL, o mascaramento, os rótulos nem a pesquisa:
+continua só com SQLite local.
 
 Dependência: o modo MySQL usa o pacote `mysql2` (`npm install`). Sem banco
 configurado ele nem é carregado, e `node server.js` segue funcionando sem instalar nada.
@@ -303,7 +316,7 @@ qualquer uma das duas, ou as duas ao mesmo tempo em portas diferentes.
 | `internal/` | Pacotes Go que implementam o backend, um por responsabilidade: `proxy/` (proxy de CORS + reescrita de manifest), `security/` (bloqueio de SSRF, guard de mesma-origem), `resolve/` (resolução de YouTube via `yt-dlp`), `history/` (persistência SQLite), `static/` (serve o `public/` embedado). Cada um é o equivalente direto de uma seção do `server.js`. |
 | `assets.go` | `//go:embed` que empacota `public/` inteiro dentro do binário Go — é por isso que `go build` gera um único executável sem precisar copiar a pasta `public/` junto. |
 | `Procfile` | Processo `web` do Tsuru (`node server.js`). |
-| `scripts/` | Testes headless (Node puro, sem navegador) da matemática mais sensível a erro de offset/bit: `color-math-test.js` (normalização PQ/HLG, conversão de primárias) e `encoding-gop-test.js` (parsing de boxes fMP4/`trun` e pacotes MPEG-TS/PES para keyframe e GOP). |
+| `scripts/` | Testes headless (Node puro, sem navegador) da matemática mais sensível a erro de offset/bit: `color-math-test.js` (normalização PQ/HLG, conversão de primárias), `encoding-gop-test.js` (parsing de boxes fMP4/`trun` e pacotes MPEG-TS/PES para keyframe e GOP), `history-mask-test.js` (mascaramento de URLs e leitura da configuração do banco) e `history-store-test.js` (rótulos, pesquisa, herança, poda e migração; roda em SQLite ou, com `HISTORY_TEST_MYSQL_URL`, num MySQL descartável). |
 | `go.mod` / `go.sum` | Dependências do backend Go (hoje só `modernc.org/sqlite`, driver SQLite 100% Go sem cgo, + suas dependências transitivas). |
 | `package.json` / `package-lock.json` | Metadados do projeto Node. Única dependência: `mysql2`, necessária só para o histórico em MySQL; `node server.js` funciona sem `npm install` no modo local. |
 | `.gitignore` | Exclui `node_modules/`, logs e o binário compilado do Go (`stream-inspector-server`) do controle de versão. |
@@ -339,6 +352,7 @@ public/
 scripts/color-math-test.js    teste headless da matemática de cor HDR (sem navegador)
 scripts/encoding-gop-test.js  teste headless do parsing de keyframe/GOP (fMP4 trun + TS/PES, sem navegador)
 scripts/history-mask-test.js  teste headless do mascaramento de credenciais e da resolução do banco do histórico
+scripts/history-store-test.js teste headless de rótulos, pesquisa, herança, poda e migração do histórico (SQLite; MySQL opcional)
 cmd/server/, internal/    porta do backend para Go (mesmo comportamento observável do server.js)
 ```
 
