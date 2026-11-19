@@ -1474,6 +1474,24 @@ function getLadder() {
   return null;
 }
 
+/**
+ * <select> nativo: mexer nas options ou no value com o menu aberto fecha ou
+ * redesenha o menu e o clique se perde (o seletor "pisca"). Com o menu aberto o
+ * foco fica no <select>, então enquanto ele tem foco o app não o altera; ao
+ * perder o foco, `onIdle` aplica o que ficou pendente. Depois de uma escolha com
+ * o mouse o foco é devolvido (o menu já fechou), para as atualizações do ABR
+ * voltarem; com o teclado o foco fica (as setas trocam o valor sem abrir menu).
+ */
+function selectIsBusy(select) { return document.activeElement === select; }
+function guardNativeSelect(select, onIdle) {
+  if (select._guarded) return;
+  select._guarded = true;
+  select.addEventListener('keydown', () => { select._kbd = true; });
+  select.addEventListener('pointerdown', () => { select._kbd = false; });
+  select.addEventListener('change', () => { if (!select._kbd) setTimeout(() => select.blur(), 0); });
+  select.addEventListener('blur', onIdle);
+}
+
 /** Trava o motor no nível `idx` (índice do getLadder), ou volta ao ABR se idx===-1. */
 function setLadder(idx) {
   const p = state.player;
@@ -1502,14 +1520,16 @@ function setLadder(idx) {
     const lv = lad && lad.levels.find((l) => l.i === idx);
     logEvent(`Ladder travado manualmente → ${lv ? `${lv.width}×${lv.height} @ ${P.fmtBits(lv.bitrate)}` : 'nível ' + idx} (ABR desligado).`);
   }
-  renderLadderPills();
+  renderLadderPills(true); // o menu acabou de fechar: pode reconstruir mesmo com o foco no select
 }
 
-/** (Re)desenha o combo-box do ladder a partir do motor ativo. */
-function renderLadderPills() {
+/** (Re)desenha o combo-box do ladder a partir do motor ativo. `force`: ignora o foco (ver guardNativeSelect). */
+function renderLadderPills(force) {
   const picker = $('#ladder-picker');
   const select = $('#ladder-select');
   if (!picker || !select) return;
+  guardNativeSelect(select, () => renderLadderPills(true));
+  if (!force && selectIsBusy(select)) return; // menu possivelmente aberto: o blur reconstrói
 
   // progressivo (YouTube VOD) ou motor sem níveis: esconde o seletor
   if (state.playerKind === 'progressive') { picker.hidden = true; return; }
@@ -1555,10 +1575,14 @@ function ladderAutoLabel(lad, ordered) {
 function refreshLadderActive() {
   const select = $('#ladder-select');
   if (!select || $('#ladder-picker').hidden) return;
+  if (selectIsBusy(select)) return; // menu possivelmente aberto: não mexer (ver guardNativeSelect)
   const lad = getLadder();
   if (!lad) return;
   const ordered = lad.levels.slice().sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-  if (select.options.length) select.options[0].textContent = ladderAutoLabel(lad, ordered);
+  // só grava quando o texto mudou: reatribuir textContent recria o nó de texto e
+  // perturba o <select> a cada tick, mesmo sem mudança nenhuma
+  const autoLabel = ladderAutoLabel(lad, ordered);
+  if (select.options.length && select.options[0].textContent !== autoLabel) select.options[0].textContent = autoLabel;
   const forced = state.forcedLevel != null && state.forcedLevel !== -1;
   const wantValue = forced ? String(state.forcedLevel) : '-1';
   if (select.value !== wantValue) select.value = wantValue;
@@ -1707,8 +1731,11 @@ function renderTrackPickers() {
   }
 
   // ---- Áudio: só mostra quando há mais de uma faixa ----
+  guardNativeSelect(audioSelect, renderTrackPickers);
   const au = getAudioTracks();
-  if (au && au.tracks.length > 1) {
+  if (selectIsBusy(audioSelect)) {
+    // menu aberto: não reconstruir agora (o blur chama renderTrackPickers de novo)
+  } else if (au && au.tracks.length > 1) {
     audioPicker.hidden = false;
     audioSelect.innerHTML = '';
     for (const tr of au.tracks) {
